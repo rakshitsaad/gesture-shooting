@@ -11,7 +11,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
   <!-- MediaPipe Hands & Camera Utils (pinned so a CDN release can't break the game) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
 
   <style>
@@ -71,15 +70,15 @@
   <header class="absolute top-0 left-0 right-0 z-20 flex items-center justify-between p-4 pointer-events-none sm:px-8">
     <!-- Score & Stats -->
     <div class="flex items-center space-x-3 pointer-events-auto">
-      <div class="px-4 py-2 border backdrop-blur-md bg-zinc-950/80 border-red-900/60 rounded-xl shadow-xl shadow-red-950/50">
+      <div class="px-4 py-2 border bg-zinc-950/80 border-red-900/60 rounded-xl shadow-xl shadow-red-950/50">
         <div class="text-[10px] font-semibold tracking-widest text-red-500 uppercase font-hud">DEFENSE SCORE</div>
         <div id="hudScore" class="text-2xl font-black font-hud text-red-400 text-glow-red">000000</div>
       </div>
-      <div class="px-3 py-2 border backdrop-blur-md bg-zinc-950/80 border-emerald-900/50 rounded-xl">
+      <div class="px-3 py-2 border bg-zinc-950/80 border-emerald-900/50 rounded-xl">
         <div class="text-[10px] font-semibold tracking-widest text-emerald-400 uppercase font-hud">HEADSHOTS</div>
         <div id="hudHeadshots" class="text-xl font-black font-hud text-emerald-400 text-glow-green">0</div>
       </div>
-      <div class="px-3 py-2 border backdrop-blur-md bg-zinc-950/80 border-amber-900/50 rounded-xl hidden sm:block">
+      <div class="px-3 py-2 border bg-zinc-950/80 border-amber-900/50 rounded-xl hidden sm:block">
         <div class="text-[10px] font-semibold tracking-widest text-amber-500 uppercase font-hud">COMBO</div>
         <div id="hudCombo" class="text-xl font-black font-hud text-amber-400">1.0x</div>
       </div>
@@ -87,7 +86,7 @@
 
     <!-- Center Wave & Alert Messenger -->
     <div class="flex flex-col items-center pointer-events-auto">
-      <div class="px-5 py-1.5 border backdrop-blur-md bg-zinc-950/90 border-red-600/50 rounded-full flex items-center space-x-2 shadow-lg shadow-red-950/60">
+      <div class="px-5 py-1.5 border bg-zinc-950/90 border-red-600/50 rounded-full flex items-center space-x-2 shadow-lg shadow-red-950/60">
         <span class="inline-block w-2.5 h-2.5 bg-red-600 rounded-full animate-ping"></span>
         <span id="hudWave" class="text-sm font-bold tracking-wider font-hud text-red-300">OUTBREAK WAVE 1</span>
       </div>
@@ -99,7 +98,7 @@
     <!-- Right Stats: Barricade Health & Grenade Launcher Ready -->
     <div class="flex items-center space-x-3 pointer-events-auto">
       <!-- Bomb / Fist Special Gauge -->
-      <div class="px-3 py-2 border backdrop-blur-md bg-zinc-950/80 border-amber-500/40 rounded-xl min-w-[110px]">
+      <div class="px-3 py-2 border bg-zinc-950/80 border-amber-500/40 rounded-xl min-w-[110px]">
         <div class="flex justify-between text-[10px] font-semibold tracking-wider text-amber-400 uppercase mb-1 font-hud">
           <span>💣 AIRSTRIKE</span>
           <span id="hudSpecialPercent">READY</span>
@@ -110,7 +109,7 @@
       </div>
 
       <!-- Barricade Integrity -->
-      <div class="px-4 py-2 border backdrop-blur-md bg-zinc-950/80 border-red-500/50 rounded-xl min-w-[130px]">
+      <div class="px-4 py-2 border bg-zinc-950/80 border-red-500/50 rounded-xl min-w-[130px]">
         <div class="flex justify-between text-[10px] font-semibold tracking-wider text-red-400 uppercase mb-1 font-hud">
           <span>BARRICADE</span>
           <span id="hudBarricadePercent">100%</span>
@@ -121,7 +120,7 @@
       </div>
 
       <!-- Sound Toggle -->
-      <button id="btnSoundToggle" class="p-2.5 text-red-400 transition-all border rounded-xl backdrop-blur-md bg-zinc-950/80 border-red-800/50 hover:bg-red-950/40 active:scale-95" title="Toggle Sound">
+      <button id="btnSoundToggle" class="p-2.5 text-red-400 transition-all border rounded-xl bg-zinc-950/80 border-red-800/50 hover:bg-red-950/40 active:scale-95" title="Toggle Sound">
         <svg id="iconSoundOn" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
         <svg id="iconSoundOff" class="hidden w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path></svg>
       </button>
@@ -130,7 +129,7 @@
 
   <!-- Bottom-Left Webcam PIP & Gesture HUD -->
   <div class="absolute bottom-4 left-4 z-20 pointer-events-none flex flex-col space-y-2">
-    <div class="relative w-44 h-32 sm:w-56 sm:h-38 rounded-xl overflow-hidden border-2 border-red-800/60 shadow-2xl bg-zinc-950/90 backdrop-blur-md">
+    <div class="relative w-44 h-32 sm:w-56 sm:h-38 rounded-xl overflow-hidden border-2 border-red-800/60 shadow-2xl bg-zinc-950/90">
       <!-- PIP Video / Hand tracking Canvas -->
       <canvas id="pipCanvas" class="w-full h-full object-cover transform -scale-x-100"></canvas>
 
@@ -146,7 +145,7 @@
       </div>
     </div>
 
-    <div class="text-[11px] font-medium text-zinc-400 bg-zinc-950/85 border border-zinc-800/90 px-3 py-1.5 rounded-lg backdrop-blur flex items-center justify-between font-hud">
+    <div class="text-[11px] font-medium text-zinc-400 bg-zinc-950/85 border border-zinc-800/90 px-3 py-1.5 rounded-lg flex items-center justify-between font-hud">
       <span>FPS: <strong id="hudFps" class="text-red-400">--</strong></span>
       <span>👊 FIST: <strong class="text-amber-400">AIRSTRIKE</strong></span>
     </div>
@@ -154,10 +153,10 @@
 
   <!-- Bottom-Center Weapon / Flashlight HUD -->
   <div class="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 pointer-events-none flex items-center space-x-3">
-    <div class="px-4 py-2 bg-zinc-950/85 border border-zinc-800 rounded-xl backdrop-blur flex items-center space-x-3">
+    <div class="px-4 py-2 bg-zinc-950/85 border border-zinc-800 rounded-xl flex items-center space-x-3">
       <div class="flex flex-col">
         <span class="text-[9px] font-hud text-zinc-500 uppercase tracking-widest">TACTICAL WEAPON</span>
-        <span class="text-sm font-bold font-hud text-amber-300">GALIL ARM</span>
+        <span class="text-sm font-bold font-hud text-amber-300">M4 CARBINE</span>
       </div>
       <div class="w-px h-7 bg-zinc-800"></div>
       <button id="btnToggleFlashlight" class="pointer-events-auto px-2.5 py-1 text-xs font-hud rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-yellow-400">
@@ -543,7 +542,9 @@
        2. GAME SETUP & CAMERA PERSPECTIVE
        ============================================================ */
     const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+    // Opaque canvas: every frame starts with a full black fill, so the browser
+    // can skip blending it with the page behind.
+    const ctx = canvas.getContext('2d', { alpha: false });
     const pipCanvas = document.getElementById('pipCanvas');
     const pipCtx = pipCanvas.getContext('2d');
     const video = document.getElementById('webcamVideo');
@@ -681,6 +682,7 @@
     let cloudSprite = makeCanvas(1, 1);
     let vignetteCanvas = makeCanvas(1, 1);
     let grainPattern = null;
+    const LIGHT_SCALE = 0.5;
     const lightCanvas = makeCanvas(1, 1);
     const lctx = lightCanvas.getContext('2d');
     const barCanvas = makeCanvas(1, 1);
@@ -694,8 +696,10 @@
       canvas.height = H;
       pipCanvas.width = 320;
       pipCanvas.height = 240;
-      lightCanvas.width = W;
-      lightCanvas.height = H;
+      // The darkness layer is all soft gradients, so half resolution looks
+      // the same and costs a quarter of the fill work.
+      lightCanvas.width = Math.ceil(W * LIGHT_SCALE);
+      lightCanvas.height = Math.ceil(H * LIGHT_SCALE);
       vmCanvas.width = W;
       vmCanvas.height = H;
 
@@ -757,53 +761,112 @@
     const aimFilterY = new OneEuroFilter(1.2, 6);
     let gestureLabel = '';
 
-    function initMediaPipe() {
+    // Hand tracking runs in hand-worker.js so the model never blocks a game
+    // frame. If the worker can't start, the older MediaPipe Hands build runs
+    // on the main thread instead.
+    let handWorker = null;
+    let trackerBusy = false;
+
+    async function initMediaPipe() {
       if (cameraInstance) return;
+      cameraInstance = {};
       camStatusDot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
       camStatusText.textContent = "OPTICAL INIT...";
 
       try {
-        if (typeof Hands === 'undefined' || typeof Camera === 'undefined') throw new Error('MediaPipe failed to load');
-
-        handTracker = new Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+        video.srcObject = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: 'user' },
+          audio: false
         });
-
-        handTracker.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.55,
-          minTrackingConfidence: 0.55
-        });
-
-        handTracker.onResults(onHandResults);
-
-        cameraInstance = new Camera(video, {
-          onFrame: async () => {
-            if (isCameraActive) {
-              await handTracker.send({ image: video });
-            }
-          },
-          width: 640,
-          height: 480
-        });
-
-        cameraInstance.start()
-          .then(() => {
-            isCameraActive = true;
-            camStatusDot.className = "w-2 h-2 rounded-full bg-emerald-400";
-            camStatusText.textContent = "HAND TRACKING";
-          })
-          .catch((err) => {
-            console.warn("Camera permission rejected. Falling back to mouse.", err);
-            cameraInstance = null;
-            switchToMouseMode("CAM BLOCKED: MOUSE");
-          });
+        await video.play();
       } catch (err) {
-        console.error("MediaPipe initialization error", err);
+        console.warn("Camera permission rejected. Falling back to mouse.", err);
         cameraInstance = null;
-        switchToMouseMode("TRACKER ERR: MOUSE");
+        switchToMouseMode("CAM BLOCKED: MOUSE");
+        return;
       }
+
+      try {
+        await startWorkerTracker();
+      } catch (err) {
+        console.warn("Background hand tracker unavailable, using main-thread tracker", err);
+        try {
+          startLegacyTracker();
+        } catch (err2) {
+          console.error("MediaPipe initialization error", err2);
+          cameraInstance = null;
+          switchToMouseMode("TRACKER ERR: MOUSE");
+          return;
+        }
+      }
+
+      isCameraActive = true;
+      camStatusDot.className = "w-2 h-2 rounded-full bg-emerald-400";
+      camStatusText.textContent = "HAND TRACKING";
+      pumpVideoFrames();
+    }
+
+    function startWorkerTracker() {
+      return new Promise((resolve, reject) => {
+        const w = new Worker('hand-worker.js');
+        const fail = (err) => { clearTimeout(timer); w.terminate(); reject(err); };
+        const timer = setTimeout(() => fail(new Error('hand worker timed out')), 30000);
+        w.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.type === 'ready') {
+            clearTimeout(timer);
+            handWorker = w;
+            resolve();
+          } else if (msg.type === 'error') {
+            fail(new Error(msg.message));
+          } else if (msg.type === 'result') {
+            trackerBusy = false;
+            onHandResults({ image: video, multiHandLandmarks: msg.landmarks });
+          }
+        };
+        w.onerror = (e) => fail(e.error || new Error(e.message));
+      });
+    }
+
+    function startLegacyTracker() {
+      if (typeof Hands === 'undefined') throw new Error('MediaPipe failed to load');
+      handTracker = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+      });
+      handTracker.setOptions({
+        maxNumHands: 1,
+        // The lite model: the full one stalls the render loop on every camera frame
+        modelComplexity: 0,
+        minDetectionConfidence: 0.55,
+        minTrackingConfidence: 0.55
+      });
+      handTracker.onResults(onHandResults);
+    }
+
+    // Feed each new webcam frame to the tracker, skipping frames while the
+    // previous one is still being processed.
+    function pumpVideoFrames() {
+      const next = () => video.requestVideoFrameCallback
+        ? video.requestVideoFrameCallback(onVideoFrame)
+        : requestAnimationFrame(onVideoFrame);
+      async function onVideoFrame() {
+        if (isCameraActive && !trackerBusy && video.readyState >= 2) {
+          trackerBusy = true;
+          try {
+            if (handWorker) {
+              const frame = await createImageBitmap(video);
+              handWorker.postMessage({ frame, ts: performance.now() }, [frame]);
+            } else {
+              await handTracker.send({ image: video });
+              trackerBusy = false;
+            }
+          } catch (err) {
+            trackerBusy = false;
+          }
+        }
+        next();
+      }
+      next();
     }
 
     function switchToMouseMode(label = "MOUSE MODE") {
@@ -829,10 +892,25 @@
 
     // The hand rarely reaches the frame edges, so hand motion is amplified
     // around the image centre. The gain follows the aim-sensitivity setting.
+    // Hand samples arrive at ~30 Hz and unevenly, but the game draws at 60.
+    // Instead of jumping to each new sample, the aim point glides from where
+    // it is now to the new sample over one sample interval (see camAimAt).
+    const camAim = { fromX: 0, fromY: 0, toX: 0, toY: 0, t0: 0, dur: 33, last: 0 };
     function setReticleFromCam(nx, ny) {
       const gain = clamp(1.25 * aimSensitivity / 0.75, 1, 2.2);
-      reticle.targetX = clamp(0.5 + ((1 - nx) - 0.5) * gain, 0, 1) * W;
-      reticle.targetY = clamp(0.5 + (ny - 0.5) * gain * 1.15, 0, 1) * H;
+      const now = performance.now();
+      const cur = camAimAt(now);
+      camAim.fromX = cur.x;
+      camAim.fromY = cur.y;
+      camAim.toX = clamp(0.5 + ((1 - nx) - 0.5) * gain, 0, 1) * W;
+      camAim.toY = clamp(0.5 + (ny - 0.5) * gain * 1.15, 0, 1) * H;
+      camAim.dur = camAim.last ? clamp(now - camAim.last, 15, 80) : 1;
+      camAim.t0 = camAim.last = now;
+    }
+    function camAimAt(now) {
+      if (!camAim.t0) return { x: reticle.targetX, y: reticle.targetY };
+      const k = clamp((now - camAim.t0) / camAim.dur, 0, 1);
+      return { x: camAim.fromX + (camAim.toX - camAim.fromX) * k, y: camAim.fromY + (camAim.toY - camAim.fromY) * k };
     }
 
     function onHandResults(results) {
@@ -847,6 +925,7 @@
         handState.pinching = false;
         handState.fistStart = 0;
         aimFilterX.reset();
+        camAim.last = 0;
         aimFilterY.reset();
         setGestureIndicator("NO HAND", "lost");
         return;
@@ -2598,7 +2677,7 @@
     }
 
     /* ============================================================
-       11. WEAPON VIEWMODEL (Galil-style rifle in black tactical gloves)
+       11. WEAPON VIEWMODEL (M4-style carbine in black tactical gloves)
        ------------------------------------------------------------
        A small low-poly 3D model, flat shaded and projected through a
        pinhole camera at the player's eye, like a standard FPS viewmodel.
@@ -2609,13 +2688,14 @@
        from above, left and behind, so back-face culling plus a fixed
        far-to-near part order draws it correctly without a depth buffer.
        ============================================================ */
-    const MUZZLE_Z = 88;                   // flash hider face
+    const MUZZLE_Z = 80;                   // flash hider face
     const NEAR_Z = 2.5;                    // near clip plane, cm in front of the eye
     const VM_OFFSET = [9, 6.5, 12];        // rifle origin from the eye: right, down, forward
     const VM_CANT = -0.12;                 // slight roll so the rifle's top faces the eye
     const vmCanvas = makeCanvas(1, 1);
     const vctx = vmCanvas.getContext('2d');
     let vmParts = null;
+    let vmBox = { x0: 0, y0: 0, x1: 0, y1: 0 };   // screen area the rifle covers
 
     const v3add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
     const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -2625,15 +2705,29 @@
     const v3norm = (a) => v3scl(a, 1 / (Math.hypot(a[0], a[1], a[2]) || 1));
 
     // Matte black finishes, lit by the moon (upper left) and a warm street fill (lower right)
-    const MAT_GUN = { spec: 0.55, shin: 16 }, MAT_GLOVE = { spec: 0.3, shin: 8 }, MAT_CLOTH = { spec: 0.18, shin: 4 };
+    const MAT_GUN = { spec: 0.55, shin: 16 }, MAT_GLOVE = { spec: 0.3, shin: 8 }, MAT_CLOTH = { spec: 0.18, shin: 4 }, MAT_SKIN = { spec: 0.22, shin: 6 };
     const C_GUN = [40, 42, 46], C_GUN_DK = [24, 25, 28], C_GUN_HG = [36, 37, 41], C_BORE = [8, 8, 9];
-    const C_GLOVE = [30, 30, 33], C_CUFF = [21, 21, 24], C_SLEEVE = [40, 41, 46], C_SLEEVE_DK = [29, 30, 34];
+    const C_GLOVE = [30, 30, 33], C_CUFF = [21, 21, 24], C_SLEEVE = [40, 41, 46], C_SLEEVE_DK = [29, 30, 34], C_SKIN = [88, 64, 50];
     const VM_LIGHT = v3norm([-0.45, -0.8, -0.35]);
     const VM_FILL = v3norm([0.6, 0.3, -0.5]);
 
     // --- Mesh building -------------------------------------------
     function vmPart(mat, dyn = null) { return { mat, dyn, faces: [] }; }
-    function addFace(part, pts, inside, col) { part.faces.push({ pts, inside, col }); }
+    // The face normal (pointing away from the solid's interior) and centre are
+    // worked out once here, so each frame only rotates them for culling.
+    function addFace(part, pts, inside, col) {
+      let n = [0, 0, 0], c = [0, 0, 0];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+        n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+        n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+        c = v3add(c, a);
+      }
+      c = v3scl(c, 1 / pts.length);
+      if (v3dot(n, v3sub(c, inside)) < 0) n = v3scl(n, -1);
+      part.faces.push({ pts, n: v3norm(n), c, col });
+    }
     // Solid between two matching rings of points; `inside` orients the face normals
     function addLoft(part, A, B, col) {
       const n = A.length, inside = [0, 1, 2].map((k) => (A.reduce((s, p) => s + p[k], 0) + B.reduce((s, p) => s + p[k], 0)) / (2 * n));
@@ -2680,7 +2774,7 @@
     // Parts in far-to-near draw order
     function buildViewmodel() {
       const R = seeded(41);
-      const gun = (dyn) => vmPart(MAT_GUN, dyn), glove = (dyn) => vmPart(MAT_GLOVE, dyn), cloth = () => vmPart(MAT_CLOTH);
+      const gun = (dyn) => vmPart(MAT_GUN, dyn), glove = (dyn) => vmPart(MAT_GLOVE, dyn), cloth = () => vmPart(MAT_CLOTH), skin = () => vmPart(MAT_SKIN);
       const wob = (n) => Array.from({ length: n }, () => 0.86 + R() * 0.28);
       const gripFront = (y) => -1.5 - (y - 4.6) * 0.4;   // front edge of the raked pistol grip
       // Long jacket sleeve, bunched into folds along the forearm
@@ -2692,58 +2786,65 @@
         }
       };
 
-      // Muzzle end: slotted flash hider, barrel, hooded front sight, gas block
-      const hider = gun(); addTube(hider, [0, 0, 80], [0, 0, MUZZLE_Z], 1.25, 1.2, 8, C_GUN, Math.PI / 8);
+      // Picatinny rail: a base strip with raised cross-teeth along it
+      const rail = (part, x0, x1, y0, y1, ty0, ty1, z0, z1) => {
+        addBox(part, x0, x1, y0, y1, z0, z1, C_GUN_DK);
+        for (let z = z0 + 0.3; z + 0.7 <= z1; z += 1.4) {
+          if (ty0 === null) addBox(part, x0, x1, ty1, y0, z, z + 0.7, C_GUN);         // teeth on top
+          else addBox(part, ty0, x0, y0, y1, z, z + 0.7, C_GUN);                       // teeth on the left side
+        }
+      };
+
+      // Muzzle end: birdcage flash hider and thin carbine barrel
+      const hider = gun(); addTube(hider, [0, 0, 73], [0, 0, MUZZLE_Z], 1.15, 1.1, 8, C_GUN, Math.PI / 8);
       const slots = gun();
-      addBox(slots, -0.3, 0.3, -1.3, -1.05, 81.5, 86.5, C_BORE);
-      addBox(slots, -1.3, -1.05, -0.3, 0.3, 81.5, 86.5, C_BORE);
-      const barrel = gun(); addTube(barrel, [0, 0, 47], [0, 0, 80.5], 0.95, 0.9, 8, C_GUN, Math.PI / 8);
-      const fsBase = gun();
-      addTube(fsBase, [0, 0, 69.5], [0, 0, 74.5], 1.3, 1.3, 8, C_GUN, Math.PI / 8);
-      addSlab(fsBase, -0.9, 0.9, [[-0.8, 69.5], [-4.9, 70.7], [-4.9, 73.3], [-0.8, 74.5]], C_GUN);
-      const fsRing = gun(); addRing(fsRing, -6.6, 72, 1.95, 1.45, 0.65, 14, C_GUN);
-      const fsPost = gun(); addBox(fsPost, -0.22, 0.22, -6.95, -5.1, 71.8, 72.2, C_GUN);
-      const gas = gun(); addBox(gas, -1.3, 1.3, -3.7, 1.25, 50, 54.5, C_GUN);
+      addBox(slots, -0.3, 0.3, -1.2, -0.95, 74.5, 79, C_BORE);
+      addBox(slots, -1.2, -0.95, -0.3, 0.3, 74.5, 79, C_BORE);
+      const barrel = gun(); addTube(barrel, [0, 0, 45], [0, 0, 73.5], 0.75, 0.72, 8, C_GUN, Math.PI / 8);
 
       // Support hand cupping the lower-left of the handguard: fingers wrap under
-      // and up the far side, thumb over the top (L is where it sits along the bore)
-      const L = 27;
+      // and up the far side, thumb over the top (L is where it sits along the bore).
+      // sh() fits the hand to the slimmer quad-rail handguard.
+      const L = 26;
+      const sh = ([x, y, z]) => [x * 0.85, y * 0.85 - 0.6, z];
       const lFingers = glove();
-      for (const [z, r] of [[1.6, 0.82], [3.5, 0.86], [5.4, 0.86], [7.3, 0.8]]) {
-        addChain(lFingers, [[0.4, 4.9, L + z], [2.9, 3.4, L + z + 0.3], [3.6, 0.7, L + z + 0.5], [3.0, -1.4, L + z + 0.6]], [r, r, r * 0.92, r * 0.8], 6, C_GLOVE);
+      for (const [z, r] of [[1.6, 0.8], [3.5, 0.84], [5.4, 0.84], [7.3, 0.78]]) {
+        addChain(lFingers, [[0.4, 4.9, L + z], [2.9, 3.4, L + z + 0.3], [3.6, 0.7, L + z + 0.5], [3.0, -1.4, L + z + 0.6]].map(sh), [r, r, r * 0.92, r * 0.8], 6, C_GLOVE);
       }
       const lPalm = glove();
-      const palm = [[-3.9, 0.9], [0.1, 4.9], [-1.8, 6.7], [-5.7, 2.8]];   // band hugging the handguard
+      const palm = [[-3.9, 0.9], [0.1, 4.9], [-1.8, 6.7], [-5.7, 2.8]].map(([x, y]) => sh([x, y, 0]));   // band hugging the handguard
       addLoft(lPalm, palm.map(([x, y]) => [x, y, L - 0.5]), palm.map(([x, y]) => [x, y, L + 9]), C_GLOVE);
 
-      // Ribbed handguard and gas-tube cover
-      const hg = gun(); addTube(hg, [0, 1, 27.5], [0, 1, 49.5], 3.0, 2.9, 8, C_GUN_HG, Math.PI / 8);
-      const hgRibs = gun();
-      for (const y of [0.3, 1.0, 1.7]) addBox(hgRibs, -3.0, -2.6, y - 0.17, y + 0.17, 29, 48, C_GUN_HG);
-      const hgTop = gun(); addTube(hgTop, [0, -2.5, 27.5], [0, -2.5, 47.5], 1.8, 1.7, 8, C_GUN_HG, Math.PI / 8);
-      const hgTopRibs = gun();
-      for (const x of [-0.9, 0, 0.9]) addBox(hgTopRibs, x - 0.3, x + 0.3, -4.45, -4.1, 29, 46, C_GUN_HG);
+      // Octagonal quad-rail handguard with vent cut-outs, top and left rails
+      const hg = gun();
+      addPrism(hg, [[-1.8, -2.2], [1.8, -2.2], [2.4, -1.6], [2.4, 2.0], [1.8, 2.6], [-1.8, 2.6], [-2.4, 2.0], [-2.4, -1.6]], 17.8, 46, C_GUN_HG);
+      const hgVents = gun();
+      for (let z = 19.5; z < 43; z += 3.4) addBox(hgVents, -2.46, -2.38, 1.15, 1.9, z, z + 2.1, C_BORE);
+      const hgRails = gun();
+      rail(hgRails, -1.05, 1.05, -2.8, -2.2, null, -3.25, 18, 45.6);
+      rail(hgRails, -2.95, -2.4, -0.5, 0.9, -3.4, null, 19, 45);
 
-      // Support arm: glove cuff and jacket sleeve running back to the bottom-left
-      const lCuff = glove(); addTube(lCuff, [-2.9, 4.0, L + 1.2], [-5.6, 6.0, L - 3.6], 2.3, 2.5, 8, C_CUFF);
-      const lArm = cloth(); sleeve(lArm, [-5.2, 5.8, L - 3.0], [-30, 9, 2], 3.0, 5.8);
+      // Flip-up front sight on the end of the top rail: winged hood round a post
+      const fSight = gun();
+      addBox(fSight, -1.15, 1.15, -3.9, -3.25, 42.2, 45.4, C_GUN);
+      for (const [x0, x1] of [[-1.0, -0.5], [0.5, 1.0]]) addSlab(fSight, x0, x1, [[-3.9, 42.6], [-7.4, 43.4], [-7.4, 44.4], [-3.9, 45.0]], C_GUN);
+      addBox(fSight, -1.0, 1.0, -7.75, -7.35, 43.3, 44.5, C_GUN);
+      addBox(fSight, -0.16, 0.16, -7.0, -3.9, 43.6, 44.0, C_GUN_DK);
+
+      // Support arm: glove cuff, bare wrist and forearm, then the jacket sleeve
+      const lCuff = glove(); addTube(lCuff, sh([-2.9, 4.0, L + 1.2]), sh([-4.8, 5.4, L - 1.8]), 2.0, 2.1, 8, C_CUFF);
+      const lSkin = skin(); addTube(lSkin, sh([-4.5, 5.2, L - 1.2]), [-15, 6.6, L - 11], 1.9, 2.7, 12, C_SKIN, 0.2);
+      const lArm = cloth(); sleeve(lArm, [-14, 6.5, L - 10], [-30, 9, 2], 3.6, 5.8);
       const lThumb = glove();
-      addChain(lThumb, [[-3.7, 0.6, L + 5.5], [-3.1, -1.5, L + 8.5], [-2.0, -2.9, L + 11.5]], [1.0, 0.92, 0.8], 6, C_GLOVE);
+      addChain(lThumb, [[-3.7, 0.6, L + 5.5], [-3.1, -1.5, L + 8.5], [-2.0, -2.9, L + 11.5]].map(sh), [0.95, 0.88, 0.78], 6, C_GLOVE);
       // Moulded knuckle armour across the back of the support hand
-      for (const z of [1.5, 4, 6.5]) addBox(lThumb, -5.0, -4.1, 1.4, 2.6, L + z, L + z + 1.8, C_CUFF);
+      for (const z of [1.5, 4, 6.5]) addBox(lThumb, -4.25, -3.5, 0.6, 1.6, L + z, L + z + 1.8, C_CUFF);
 
-      // Rear sight block with protective ears round the notch
-      const rsBlock = gun(); addBox(rsBlock, -1.7, 1.7, -3.3, -1.5, 20.8, 27.4, C_GUN);
-      const rsEars = gun();
-      addBox(rsEars, -1.75, -1.0, -6.3, -3.3, 23.2, 25.2, C_GUN);
-      addBox(rsEars, 1.0, 1.75, -6.3, -3.3, 23.2, 25.2, C_GUN);
-      addBox(rsEars, -1.0, 1.0, -4.4, -3.3, 23.5, 24.9, C_GUN_DK);
-
-      // Curved 35-round magazine, magazine release and pistol grip
+      // Straight-ish 30-round STANAG magazine, flared magazine well and pistol grip
       const mag = gun();
-      addSlab(mag, -1.35, 1.35, [[4.4, 8.6], [10, 9.6], [15.4, 11.3], [20.4, 13.6], [20.4, 21.2], [15.4, 18.8], [10, 16.8], [4.4, 15.4]], C_GUN);
-      const magPlate = gun(); addSlab(magPlate, -1.6, 1.6, [[20.2, 13.4], [20.2, 21.6], [21.3, 21.9], [21.3, 13.5]], C_GUN_DK);
-      const magRel = gun(); addBox(magRel, -0.7, 0.7, 4.6, 6.1, 7.6, 8.6, C_GUN_DK);
+      addSlab(mag, -1.25, 1.25, [[6.5, 5.0], [14, 5.5], [21.5, 6.6], [21.5, 12.9], [14, 11.7], [6.5, 11.3]], C_GUN);
+      const magPlate = gun(); addSlab(magPlate, -1.45, 1.45, [[21.3, 6.5], [21.3, 13.1], [22.4, 13.3], [22.4, 6.5]], C_GUN_DK);
+      const magwell = gun(); addBox(magwell, -1.75, 1.75, 3.6, 7.2, 4.6, 11.8, C_GUN);
       const grip = gun(); addSlab(grip, -1.4, 1.4, [[4.6, -6.0], [4.6, -1.5], [14.5, -5.5], [14.5, -9.5]], C_GUN);
 
       // Firing hand wrapped round the grip, fingers curled across its front
@@ -2765,37 +2866,42 @@
         addSlab(p, -0.3, 0.3, [[4.6, 1.2 - t], [4.6, 2.0 - t], [6.6, 1.6 - t], [7.0, 0.9 - t]], C_GUN_DK);
       });
       const guard = gun();
-      addBox(guard, -0.4, 0.4, 7.6, 8.2, -2.4, 6.4, C_GUN);
-      addBox(guard, -0.4, 0.4, 4.6, 7.6, 5.8, 6.4, C_GUN);
-      // Galil's raised charging handle on the right, cycling with the bolt
-      const handle = gun((p) => {
-        const b = -weapon.bolt * 5;
-        addChain(p, [[1.8, -2.3, 12 + b], [3.4, -2.5, 12 + b], [3.7, -3.9, 12.4 + b]], [0.36, 0.36, 0.48], 6, C_GUN);
-      });
+      addBox(guard, -0.4, 0.4, 7.6, 8.2, -2.4, 4.4, C_GUN);
+      addBox(guard, -0.4, 0.4, 4.6, 7.6, 3.8, 4.4, C_GUN);
 
-      // Receiver, selector lever and the ribbed top cover
-      const lower = gun(); addBox(lower, -1.9, 1.9, -1.6, 4.6, -9, 22, C_GUN);
-      const rivets = gun();
-      for (const [y, z] of [[2.6, -6], [2.6, 4.5], [0.4, 16]]) addBox(rivets, -2.02, -1.9, y - 0.3, y + 0.3, z - 0.3, z + 0.3, C_GUN_DK);
-      const selector = gun();
-      addSlab(selector, -2.32, -1.9, [[-0.7, -7.5], [-0.7, 2.0], [0.3, 2.0], [0.6, -7.5]], C_GUN_DK);
-      const cover = gun(); addPrism(cover, [[-1.95, -1.6], [-1.3, -3.4], [1.3, -3.4], [1.95, -1.6]], -8.6, 20.6, C_GUN);
-      const ribs = gun();
-      for (const x of [-0.75, 0.75]) addBox(ribs, x - 0.2, x + 0.2, -3.62, -3.3, -7.5, 19.5, C_GUN);   // stamped ribs
+      // Lower receiver with selector and bolt catch, flat-top upper with its rail
+      const lower = gun(); addBox(lower, -1.45, 1.45, 1.5, 4.6, -5.5, 11.8, C_GUN);
+      const controls = gun();
+      addBox(controls, -1.8, -1.45, 2.0, 2.8, -4.5, -2.0, C_GUN_DK);   // selector
+      addBox(controls, -1.7, -1.45, 1.8, 3.2, 3.6, 4.4, C_GUN_DK);     // bolt catch
+      const upper = gun(); addBox(upper, -1.55, 1.55, -2.2, 1.5, -6.5, 17.8, C_GUN);
+      const upperRail = gun(); rail(upperRail, -1.05, 1.05, -2.8, -2.2, null, -3.25, -6.3, 17.6);
+      // T-shaped charging handle at the back of the upper, latch on the left
+      const handle = gun();
+      addBox(handle, -2.4, 2.4, -2.0, -1.1, -7.6, -6.5, C_GUN_DK);
+      addBox(handle, -2.9, -2.2, -2.0, -0.9, -7.6, -6.0, C_GUN_DK);
 
-      // Folding skeleton stock, running back past the eye
+      // Flip-up rear sight: aperture ring between two protective ears
+      const rSight = gun();
+      addBox(rSight, -1.35, 1.35, -3.9, -3.25, -5.6, -0.6, C_GUN);
+      addSlab(rSight, -1.1, 1.1, [[-3.9, -4.6], [-5.4, -3.9], [-5.4, -2.5], [-3.9, -1.4]], C_GUN);
+      addRing(rSight, -6.2, -3.2, 0.8, 0.4, 0.3, 10, C_GUN);
+      for (const [x0, x1] of [[-1.35, -0.95], [0.95, 1.35]]) addBox(rSight, x0, x1, -7.3, -3.9, -4.0, -2.4, C_GUN);
+
+      // Buffer tube and collapsible stock, running back past the eye
       const stock = gun();
-      addTube(stock, [0, -0.9, -9], [0, -0.4, -42], 0.75, 0.75, 6, C_GUN);
-      addTube(stock, [0, 3.8, -9], [0, 6.6, -40], 0.75, 0.75, 6, C_GUN);
+      addBox(stock, -2.1, 2.1, -1.9, 1.7, -7.4, -6.5, C_GUN_DK);   // receiver end plate
+      addTube(stock, [0, -0.3, -6.5], [0, -0.3, -30], 1.5, 1.5, 8, C_GUN, Math.PI / 8);
+      addSlab(stock, -2.0, 2.0, [[-1.9, -22], [-1.9, -36], [8.0, -36], [6.0, -28], [1.6, -22]], C_GUN);
 
       // Firing hand's thumb along the receiver, then its cuff and sleeve
       const rThumb = glove(); addChain(rThumb, [[-1.4, 5.0, -7.2], [-2.4, 3.0, -4.2], [-2.55, 1.2, 0.4]], [1.1, 0.98, 0.84], 6, C_GLOVE);
       const rCuff = glove(); addTube(rCuff, [1.0, 10.0, -10.2], [2.8, 13.2, -15.4], 2.4, 2.7, 8, C_CUFF);
       const rArm = cloth(); sleeve(rArm, [2.6, 12.9, -14.8], [11, 27, -42], 3.3, 5.6);
 
-      return [hider, slots, barrel, fsBase, fsRing, fsPost, gas, lFingers, lPalm, hg, hgRibs, hgTop, hgTopRibs,
-        lCuff, lArm, lThumb, rsBlock, rsEars, mag, magPlate, magRel, grip, rHand, rFingers, rIndex, trigger, guard,
-        handle, lower, rivets, selector, cover, ribs, stock, rThumb, rCuff, rArm];
+      return [hider, slots, barrel, lFingers, lPalm, hg, hgVents, hgRails, fSight,
+        lCuff, lSkin, lArm, lThumb, mag, magPlate, magwell, grip, rHand, rFingers, rIndex, trigger, guard,
+        lower, controls, upper, upperRail, handle, rSight, stock, rThumb, rCuff, rArm];
     }
 
     // --- Pose, projection & drawing --------------------------------
@@ -2825,8 +2931,13 @@
         org[1] + B.r[1] * p[0] + B.d[1] * p[1] + B.f[1] * p[2],
         org[2] + B.r[2] * p[0] + B.d[2] * p[1] + B.f[2] * p[2]
       ];
+      const toDir = (p) => [
+        B.r[0] * p[0] + B.d[0] * p[1] + B.f[0] * p[2],
+        B.r[1] * p[0] + B.d[1] * p[1] + B.f[1] * p[2],
+        B.r[2] * p[0] + B.d[2] * p[1] + B.f[2] * p[2]
+      ];
       const proj = (q) => [cx + (f * q[0]) / q[2], cy + (f * q[1]) / q[2]];
-      return { f, toCam, proj, fw };
+      return { f, toCam, toDir, proj, fw };
     }
 
     // Cut a polygon at the near plane so parts reaching past the eye still draw
@@ -2859,28 +2970,20 @@
       if (part.dyn) { part.faces.length = 0; part.dyn(part); }
       const list = [];
       for (const face of part.faces) {
-        const pts = face.pts.map(F.toCam);
-        // Newell normal, turned to point away from the solid's interior
-        let n = [0, 0, 0], c = [0, 0, 0];
-        for (let i = 0; i < pts.length; i++) {
-          const a = pts[i], b = pts[(i + 1) % pts.length];
-          n[0] += (a[1] - b[1]) * (a[2] + b[2]);
-          n[1] += (a[2] - b[2]) * (a[0] + b[0]);
-          n[2] += (a[0] - b[0]) * (a[1] + b[1]);
-          c = v3add(c, a);
-        }
-        c = v3scl(c, 1 / pts.length);
-        if (v3dot(n, v3sub(c, F.toCam(face.inside))) < 0) n = v3scl(n, -1);
+        const c = F.toCam(face.c), n = F.toDir(face.n);
         if (v3dot(n, c) >= 0) continue;          // facing away from the eye
-        const clipped = clipNear(pts);
+        const clipped = clipNear(face.pts.map(F.toCam));
         if (clipped.length < 3) continue;
-        list.push({ d: v3dot(c, c), pts: clipped, col: shadeVm(face.col, v3norm(n), c, part.mat) });
+        list.push({ d: v3dot(c, c), pts: clipped, col: shadeVm(face.col, n, c, part.mat) });
       }
       list.sort((a, b) => b.d - a.d);
+      const box = vmBox;
       for (const f of list) {
         vctx.beginPath();
         for (let i = 0; i < f.pts.length; i++) {
           const [x, y] = F.proj(f.pts[i]);
+          if (x < box.x0) box.x0 = x; if (x > box.x1) box.x1 = x;
+          if (y < box.y0) box.y0 = y; if (y > box.y1) box.y1 = y;
           if (i) vctx.lineTo(x, y); else vctx.moveTo(x, y);
         }
         vctx.closePath();
@@ -2950,10 +3053,17 @@
       const c = vctx;
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.globalCompositeOperation = 'source-over';
-      c.clearRect(0, 0, W, H);
+      // Only the screen area the rifle covered last frame needs clearing, and
+      // only the area it covers now needs shading and copying to the screen
+      const prev = vmBox;
+      c.clearRect(prev.x0, prev.y0, prev.x1 - prev.x0, prev.y1 - prev.y0);
+      vmBox = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
       c.lineJoin = 'round';
       c.lineWidth = 0.75;
       for (const part of vmParts) drawVmPart(part, F);
+      vmBox.x0 = clamp(Math.floor(vmBox.x0) - 2, 0, W); vmBox.x1 = clamp(Math.ceil(vmBox.x1) + 2, 0, W);
+      vmBox.y0 = clamp(Math.floor(vmBox.y0) - 2, 0, H); vmBox.y1 = clamp(Math.ceil(vmBox.y1) + 2, 0, H);
+      const bx = vmBox.x0, by = vmBox.y0, bw = vmBox.x1 - bx, bh = vmBox.y1 - by;
 
       // Screen points the rest of the game uses: tracers start at the muzzle,
       // brass leaves the ejection port up and to the right
@@ -2973,17 +3083,17 @@
       const shadeG = c.createLinearGradient(0, H * 0.45, 0, H);
       shadeG.addColorStop(0, 'rgba(6,9,16,0.05)');
       shadeG.addColorStop(1, 'rgba(6,9,16,0.3)');
-      c.fillStyle = shadeG; c.fillRect(0, 0, W, H);
+      c.fillStyle = shadeG; c.fillRect(bx, by, bw, bh);
       if (weapon.flash > 0) {
         const g = c.createRadialGradient(weapon.muzzle.x, weapon.muzzle.y, 0, weapon.muzzle.x, weapon.muzzle.y, H * 0.6);
         g.addColorStop(0, `rgba(255,180,90,${0.55 * weapon.flash})`);
         g.addColorStop(1, 'rgba(255,140,60,0)');
-        c.fillStyle = g; c.fillRect(0, 0, W, H);
+        c.fillStyle = g; c.fillRect(bx, by, bw, bh);
       }
       const lf = lightningFlash();
-      if (lf > 0) { c.fillStyle = `rgba(190,205,255,${0.3 * lf})`; c.fillRect(0, 0, W, H); }
+      if (lf > 0) { c.fillStyle = `rgba(190,205,255,${0.3 * lf})`; c.fillRect(bx, by, bw, bh); }
       c.globalCompositeOperation = 'source-over';
-      ctx.drawImage(vmCanvas, 0, 0);
+      if (bw > 0 && bh > 0) ctx.drawImage(vmCanvas, bx, by, bw, bh, bx, by, bw, bh);
 
       if (weapon.flash > 0) {
         ctx.save();
@@ -3068,6 +3178,7 @@
     function renderLighting() {
       const flash = lightningFlash();
       const amb = 0.76 * (1 - flash * 0.6);
+      lctx.setTransform(LIGHT_SCALE, 0, 0, LIGHT_SCALE, 0, 0);
       lctx.globalCompositeOperation = 'source-over';
       lctx.clearRect(0, 0, W, H);
       const dg = lctx.createLinearGradient(0, 0, 0, H);
@@ -3078,7 +3189,7 @@
       lctx.fillRect(0, 0, W, H);
       lctx.globalCompositeOperation = 'destination-out';
       for (const L of lights) drawLightBlob(lctx, L, [0, 0, 0], L.i);
-      ctx.drawImage(lightCanvas, 0, 0);
+      ctx.drawImage(lightCanvas, 0, 0, W, H);
 
       ctx.globalCompositeOperation = 'lighter';
       for (const L of lights) if (L.color && L.glow > 0) drawLightBlob(ctx, L, L.color, L.glow);
@@ -3227,9 +3338,10 @@
       if (grainPattern) {
         ctx.save();
         ctx.globalAlpha = 0.045;
-        ctx.translate(Math.random() * 200, Math.random() * 200);
+        const gx = Math.random() * 200, gy = Math.random() * 200;
+        ctx.translate(gx, gy);
         ctx.fillStyle = grainPattern;
-        ctx.fillRect(-200, -200, W + 400, H + 400);
+        ctx.fillRect(-gx, -gy, W, H);
         ctx.restore();
       }
     }
@@ -3439,8 +3551,13 @@
       if (isMouseLocked()) {
         reticle.x = reticle.targetX;
         reticle.y = reticle.targetY;
+      } else if (isCameraActive) {
+        // Already smooth from the glide between hand samples
+        const p = camAimAt(performance.now());
+        reticle.targetX = reticle.x = p.x;
+        reticle.targetY = reticle.y = p.y;
       } else {
-        const follow = 1 - Math.exp(-dt * (isCameraActive ? 30 : 45));
+        const follow = 1 - Math.exp(-dt * 45);
         reticle.x += (reticle.targetX - reticle.x) * follow;
         reticle.y += (reticle.targetY - reticle.y) * follow;
       }
@@ -3492,13 +3609,23 @@
       if (pointerHeld || handFiring) triggerShoot();
     }
 
+    // Frame cap. requestAnimationFrame runs at the monitor's refresh rate; this
+    // holds the game at 60 FPS on faster screens (120/144/165 Hz) too.
+    const MAX_FPS = 60;
+    const FRAME_MS = 1000 / MAX_FPS;
+    let nextFrameAt = 0;
     let lastFrame = performance.now();
     function frame(now) {
+      requestAnimationFrame(frame);
+      if (now < nextFrameAt - 1) return;
+      // Step the deadline by a fixed amount so skipped vsyncs even out to ~100 FPS,
+      // but don't let it fall far behind after a stall.
+      nextFrameAt = Math.max(nextFrameAt + FRAME_MS, now);
       const rawDt = (now - lastFrame) / 1000;
       lastFrame = now;
       fpsAcc += rawDt;
       fpsFrames++;
-      if (fpsAcc >= 0.5) {
+      if (fpsAcc >= 1) {
         hudFps.textContent = Math.round(fpsFrames / fpsAcc);
         fpsAcc = 0;
         fpsFrames = 0;
@@ -3515,33 +3642,40 @@
         if (isRunning) updateGame(dt);
       }
       render();
-      requestAnimationFrame(frame);
     }
 
     /* ============================================================
        14. HUD, STATES & NOTIFICATIONS
        ============================================================ */
+    // updateHUD runs on every shot, so only touch the DOM when a value actually
+    // changes; each write costs a style recalc (and a Tailwind rescan).
+    const hudCache = new Map();
+    function setHud(el, prop, value) {
+      const key = el.id + prop;
+      if (hudCache.get(key) === value) return;
+      hudCache.set(key, value);
+      if (prop === 'width') el.style.width = value;
+      else el[prop] = value;
+    }
+
     function updateHUD() {
-      hudScore.textContent = Math.round(score).toString().padStart(6, '0');
-      hudHeadshots.textContent = headshots;
-      hudCombo.textContent = `${comboMultiplier().toFixed(1)}x`;
+      setHud(hudScore, 'textContent', Math.round(score).toString().padStart(6, '0'));
+      setHud(hudHeadshots, 'textContent', String(headshots));
+      setHud(hudCombo, 'textContent', `${comboMultiplier().toFixed(1)}x`);
 
       // Barricade bar
       const barPercent = Math.max(0, Math.round(barricadeHealth));
-      hudBarricadePercent.textContent = `${barPercent}%`;
-      hudBarricadeBar.style.width = `${barPercent}%`;
-
-      if (barPercent < 30) {
-        hudBarricadeBar.className = "h-full bg-red-600 rounded-full animate-pulse transition-all duration-300";
-      } else {
-        hudBarricadeBar.className = "h-full bg-gradient-to-r from-red-600 via-rose-500 to-emerald-500 rounded-full transition-all duration-300";
-      }
+      setHud(hudBarricadePercent, 'textContent', `${barPercent}%`);
+      setHud(hudBarricadeBar, 'width', `${barPercent}%`);
+      setHud(hudBarricadeBar, 'className', barPercent < 30
+        ? "h-full bg-red-600 rounded-full animate-pulse transition-all duration-300"
+        : "h-full bg-gradient-to-r from-red-600 via-rose-500 to-emerald-500 rounded-full transition-all duration-300");
 
       // Special Bomb bar
       const specialPct = Math.round(specialCharge);
-      hudSpecialBar.style.width = `${specialPct}%`;
-      hudSpecialPercent.textContent = specialPct >= 100 ? "READY!" : `${specialPct}%`;
-      hudSpecialPercent.className = specialPct >= 100 ? "text-amber-400 font-bold animate-pulse" : "text-zinc-400";
+      setHud(hudSpecialBar, 'width', `${specialPct}%`);
+      setHud(hudSpecialPercent, 'textContent', specialPct >= 100 ? "READY!" : `${specialPct}%`);
+      setHud(hudSpecialPercent, 'className', specialPct >= 100 ? "text-amber-400 font-bold animate-pulse" : "text-zinc-400");
     }
 
     let alertTimer = null;
