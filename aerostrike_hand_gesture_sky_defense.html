@@ -678,7 +678,6 @@
     let skyCanvas = makeCanvas(1, 1);
     let sceneCanvas = makeCanvas(1, 1);
     let emissiveCanvas = makeCanvas(1, 1);
-    let fogSprite = makeCanvas(1, 1);
     let cloudSprite = makeCanvas(1, 1);
     let vignetteCanvas = makeCanvas(1, 1);
     let grainPattern = null;
@@ -1495,21 +1494,6 @@
     }
 
     function buildPostFx() {
-      // Tileable fog band
-      fogSprite = makeCanvas(W, H * 0.24);
-      const fg = fogSprite.getContext('2d');
-      for (let i = 0; i < 80; i++) {
-        const x = Math.random() * W, y = fogSprite.height * (0.5 + (Math.random() - 0.5) * 0.6);
-        const r = H * (0.04 + Math.random() * 0.07);
-        for (const ox of [x - W, x, x + W]) {
-          const g = fg.createRadialGradient(ox, y, 0, ox, y, r);
-          g.addColorStop(0, 'rgba(120,135,152,0.11)');
-          g.addColorStop(1, 'rgba(120,135,152,0)');
-          fg.fillStyle = g;
-          fg.fillRect(ox - r, y - r, r * 2, r * 2);
-        }
-      }
-
       // Cloud sprite
       cloudSprite = makeCanvas(520, 190);
       const cg = cloudSprite.getContext('2d');
@@ -3149,8 +3133,6 @@
         addLight(ls.ground.x, ls.ground.y, 6.5 * ls.s, 0.8 * pw, [255, 180, 110], 0.15 * pw, sq);
         addLight(ls.head.x, ls.head.y, 2.2 * ls.s, 0.7 * pw, [255, 200, 140], 0.3 * pw);
       }
-      const fl = 0.9 + 0.08 * Math.sin(time * 17) + 0.05 * Math.sin(time * 41);
-      addLight(barrelScreen.x, barrelScreen.y, 4.5 * barrelScreen.s * fl, 0.85, [255, 120, 40], 0.2 * fl);
       if (weapon.flash > 0) {
         addLight(weapon.muzzle.x, weapon.muzzle.y, H * 0.8, 0.85 * weapon.flash, [255, 170, 70], 0.22 * weapon.flash);
       }
@@ -3225,18 +3207,6 @@
         ctx.strokeStyle = `rgba(235,240,255,${f})`; ctx.lineWidth = path === lightning.pts ? 2 : 1.2; ctx.stroke();
       }
       ctx.restore();
-    }
-
-    function renderFog() {
-      const fh = fogSprite.height, y = horizonY - fh * 0.55;
-      const o1 = (time * 14) % W, o2 = (time * 26) % W;
-      ctx.globalAlpha = 0.55;
-      ctx.drawImage(fogSprite, o1 - W, y);
-      ctx.drawImage(fogSprite, o1, y);
-      ctx.globalAlpha = 0.35;
-      ctx.drawImage(fogSprite, -o2, y + fh * 0.25, W, fh * 0.8);
-      ctx.drawImage(fogSprite, W - o2, y + fh * 0.25, W, fh * 0.8);
-      ctx.globalAlpha = 1;
     }
 
     function renderExplosions() {
@@ -3449,7 +3419,6 @@
       renderLightningBolt();
       ctx.drawImage(sceneCanvas, 0, 0);
       renderDecals();
-      renderFog();
 
       // 2. Zombies, farthest first
       for (const z of zombies) z.computeBounds();
@@ -3482,7 +3451,6 @@
     /* ============================================================
        13. UPDATE LOOP
        ============================================================ */
-    let fireAcc = 0;
     let fpsAcc = 0, fpsFrames = 0;
 
     function updateAmbient(dt) {
@@ -3507,16 +3475,6 @@
         const y = rand(horizonY + 10, H);
         const depth = (y - horizonY) / (H - horizonY);
         addParticle({ type: 'splash', x: rand(0, W), y, vx: 0, vy: 0, size: 2 + depth * 7, life: 0.25 });
-      }
-
-      // Burning barrel
-      fireAcc += dt * 40;
-      const bs = barrelScreen.s, k = bs / 110;
-      while (fireAcc > 1) {
-        fireAcc--;
-        addParticle({ type: 'flame', x: barrelScreen.x + rand(-0.22, 0.22) * bs, y: barrelScreen.y, vx: rand(-15, 15) * k, vy: -rand(70, 140) * k, size: rand(0.12, 0.22) * bs, life: rand(0.35, 0.7) });
-        if (Math.random() < 0.12) addParticle({ type: 'ember', x: barrelScreen.x, y: barrelScreen.y, vx: rand(-30, 30) * k, vy: -rand(80, 160) * k, g: -10, size: rand(1, 2) * k, life: rand(1, 1.8) });
-        if (Math.random() < 0.1) addParticle({ type: 'smoke', dark: true, x: barrelScreen.x, y: barrelScreen.y - 0.4 * bs, vx: rand(-10, 10), vy: -rand(40, 70) * k, size: 0.2 * bs, grow: 0.4 * bs, life: rand(1.5, 2.5), alpha: 0.35 });
       }
 
       updateParticles(dt);
