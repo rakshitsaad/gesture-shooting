@@ -63,9 +63,6 @@
   <!-- Scanlines Layer -->
   <div class="absolute inset-0 z-10 scanlines pointer-events-none"></div>
 
-  <!-- Hidden Video Element for MediaPipe processing -->
-  <video id="webcamVideo" class="hidden" playsinline muted></video>
-
   <!-- Top HUD Bar -->
   <header class="absolute top-0 left-0 right-0 z-20 flex items-center justify-between p-4 pointer-events-none sm:px-8">
     <!-- Score & Stats -->
@@ -130,8 +127,10 @@
   <!-- Bottom-Left Webcam PIP & Gesture HUD -->
   <div class="absolute bottom-4 left-4 z-20 pointer-events-none flex flex-col space-y-2">
     <div class="relative w-44 h-32 sm:w-56 sm:h-38 rounded-xl overflow-hidden border-2 border-red-800/60 shadow-2xl bg-zinc-950/90">
-      <!-- PIP Video / Hand tracking Canvas -->
-      <canvas id="pipCanvas" class="w-full h-full object-cover transform -scale-x-100"></canvas>
+      <!-- PIP: the webcam video itself (shown by the browser's compositor, no
+           per-frame copying) with the hand skeleton drawn on a clear canvas above -->
+      <video id="webcamVideo" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100" playsinline muted></video>
+      <canvas id="pipCanvas" class="absolute inset-0 w-full h-full object-cover transform -scale-x-100"></canvas>
 
       <!-- Status Badge -->
       <div class="absolute top-2 left-2 flex items-center space-x-1.5 px-2 py-0.5 rounded bg-zinc-900/90 border border-zinc-700 text-[9px] font-hud">
@@ -681,6 +680,7 @@
     let cloudSprite = makeCanvas(1, 1);
     let vignetteCanvas = makeCanvas(1, 1);
     let grainPattern = null;
+    let renderScale = 1;   // main canvas pixels per screen pixel (see adaptRenderScale)
     const LIGHT_SCALE = 0.5;
     const lightCanvas = makeCanvas(1, 1);
     const lctx = lightCanvas.getContext('2d');
@@ -691,8 +691,8 @@
     function resizeCanvas() {
       W = window.innerWidth;
       H = window.innerHeight;
-      canvas.width = W;
-      canvas.height = H;
+      canvas.width = Math.round(W * renderScale);
+      canvas.height = Math.round(H * renderScale);
       pipCanvas.width = 320;
       pipCanvas.height = 240;
       // The darkness layer is all soft gradients, so half resolution looks
@@ -756,8 +756,8 @@
         return this.x;
       }
     }
-    const aimFilterX = new OneEuroFilter(1.2, 6);
-    const aimFilterY = new OneEuroFilter(1.2, 6);
+    const aimFilterX = new OneEuroFilter(1.7, 8);
+    const aimFilterY = new OneEuroFilter(1.7, 8);
     let gestureLabel = '';
 
     // Hand tracking runs in hand-worker.js so the model never blocks a game
@@ -765,6 +765,10 @@
     // on the main thread instead.
     let handWorker = null;
     let trackerBusy = false;
+    // 30 hand readings a second is enough for smooth aim (the reticle glides
+    // between them); webcams that run at 60 would otherwise double the CPU load
+    const TRACK_INTERVAL_MS = 1000 / 30 - 2;
+    let lastTrackAt = 0, trackSentAt = 0, trackMs = 0;
 
     async function initMediaPipe() {
       if (cameraInstance) return;
@@ -774,7 +778,9 @@
 
       try {
         video.srcObject = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480, facingMode: 'user' },
+          // Small, 30 fps capture: the tracker only needs ~320x240, and every
+          // extra pixel is decoded and copied by the (integrated) GPU
+          video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
           audio: false
         });
         await video.play();
@@ -820,6 +826,7 @@
             fail(new Error(msg.message));
           } else if (msg.type === 'result') {
             trackerBusy = false;
+            trackMs += (performance.now() - trackSentAt - trackMs) * 0.1;
             onHandResults({ image: video, multiHandLandmarks: msg.landmarks });
           }
         };
@@ -849,12 +856,17 @@
         ? video.requestVideoFrameCallback(onVideoFrame)
         : requestAnimationFrame(onVideoFrame);
       async function onVideoFrame() {
-        if (isCameraActive && !trackerBusy && video.readyState >= 2) {
+        const now = performance.now();
+        if (isCameraActive && !trackerBusy && video.readyState >= 2 && now - lastTrackAt >= TRACK_INTERVAL_MS) {
           trackerBusy = true;
+          lastTrackAt = now;
           try {
             if (handWorker) {
-              const frame = await createImageBitmap(video);
-              handWorker.postMessage({ frame, ts: performance.now() }, [frame]);
+              // A small copy is plenty for the model (it looks at 192-224 px
+              // crops) and is far cheaper to read back from the GPU and send
+              const frame = await createImageBitmap(video, { resizeWidth: 320, resizeHeight: 240, resizeQuality: 'low' });
+              trackSentAt = performance.now();
+              handWorker.postMessage({ frame, ts: trackSentAt }, [frame]);
             } else {
               await handTracker.send({ image: video });
               trackerBusy = false;
@@ -903,7 +915,9 @@
       camAim.fromY = cur.y;
       camAim.toX = clamp(0.5 + ((1 - nx) - 0.5) * gain, 0, 1) * W;
       camAim.toY = clamp(0.5 + (ny - 0.5) * gain * 1.15, 0, 1) * H;
-      camAim.dur = camAim.last ? clamp(now - camAim.last, 15, 80) : 1;
+      // Glide over most (not all) of the gap to the next sample: still smooth,
+      // but the aim lands on each reading sooner
+      camAim.dur = camAim.last ? clamp((now - camAim.last) * 0.75, 12, 60) : 1;
       camAim.t0 = camAim.last = now;
     }
     function camAimAt(now) {
@@ -913,10 +927,8 @@
     }
 
     function onHandResults(results) {
+      // The webcam shows through from the <video> underneath; only the skeleton is drawn here
       pipCtx.clearRect(0, 0, pipCanvas.width, pipCanvas.height);
-      if (results.image) {
-        pipCtx.drawImage(results.image, 0, 0, pipCanvas.width, pipCanvas.height);
-      }
 
       const marks = results.multiHandLandmarks && results.multiHandLandmarks[0];
       if (!marks) {
@@ -3305,7 +3317,7 @@
         ctx.fillStyle = `rgba(200,215,255,${lf * 0.12})`;
         ctx.fillRect(0, 0, W, H);
       }
-      if (grainPattern) {
+      if (grainPattern && !lowFx) {
         ctx.save();
         ctx.globalAlpha = 0.045;
         const gx = Math.random() * 200, gy = Math.random() * 200;
@@ -3408,6 +3420,7 @@
     }
 
     function render() {
+      ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, W, H);
       ctx.save();
@@ -3470,7 +3483,7 @@
         if (d.y > H) { d.y = -d.len - Math.random() * H * 0.3; d.x = Math.random() * (W + 200); }
         if (d.x < -50) d.x += W + 100;
       }
-      splashAcc += dt * 108;
+      splashAcc += lowFx ? 0 : dt * 108;   // splashes are dropped by auto quality
       for (; splashAcc >= 1; splashAcc--) {
         const y = rand(horizonY + 10, H);
         const depth = (y - horizonY) / (H - horizonY);
@@ -3567,24 +3580,66 @@
       if (pointerHeld || handFiring) triggerShoot();
     }
 
-    // Frame cap. requestAnimationFrame runs at the monitor's refresh rate; this
-    // holds the game at 60 FPS on faster screens (120/144/165 Hz) too.
-    const MAX_FPS = 60;
-    const FRAME_MS = 1000 / MAX_FPS;
+    // Frame cap: a steady 60 FPS. Capping (rather than drawing on every
+    // monitor refresh) leaves the GPU the most time per frame, so 60 can be
+    // held with the webcam running. On 60/120/240 Hz screens frames land on
+    // every 1st/2nd/4th refresh exactly.
+    const TARGET_FPS = 60;
+    const FRAME_MS = 1000 / TARGET_FPS;
+
+    // Auto quality, to keep at least 60 FPS. If the game falls below 57 FPS
+    // for two seconds in a row (e.g. a weak integrated GPU also handling the
+    // webcam), the first step drops the film grain and rain splashes, then the
+    // game is drawn at a lower internal resolution (5% steps, never below 80%),
+    // stretched to fill the screen. Everything is still drawn in screen
+    // coordinates; only the pixel count drops. After 6 steady seconds it tries
+    // a step back up, but not for 20 s after having to step down.
+    const MIN_RENDER_SCALE = 0.8;
+    let lowFpsSeconds = 0, goodFpsSeconds = 0, lastDropAt = -1e9;
+    let lowFx = false;
+    function setRenderScale(s) {
+      renderScale = Math.round(s * 100) / 100;
+      canvas.width = Math.round(W * renderScale);
+      canvas.height = Math.round(H * renderScale);
+    }
+    function adaptRenderScale(fps) {
+      if (!isRunning) { lowFpsSeconds = goodFpsSeconds = 0; return; }
+      if (fps < TARGET_FPS - 3) {
+        goodFpsSeconds = 0;
+        if (++lowFpsSeconds < 2) return;
+        lowFpsSeconds = 0;
+        if (!lowFx) lowFx = true;
+        else if (renderScale > MIN_RENDER_SCALE) setRenderScale(Math.max(MIN_RENDER_SCALE, renderScale - 0.05));
+        else return;
+        lastDropAt = performance.now();
+      } else {
+        lowFpsSeconds = 0;
+        if (renderScale >= 1 || ++goodFpsSeconds < 6 || performance.now() - lastDropAt < 20000) return;
+        goodFpsSeconds = 0;
+        setRenderScale(Math.min(1, renderScale + 0.05));
+      }
+    }
     let nextFrameAt = 0;
     let lastFrame = performance.now();
     function frame(now) {
       requestAnimationFrame(frame);
       if (now < nextFrameAt - 1) return;
-      // Step the deadline by a fixed amount so skipped vsyncs even out to ~100 FPS,
-      // but don't let it fall far behind after a stall.
+      // Step the deadline by a fixed amount so skipped refreshes even out to
+      // exactly 60 a second, but don't let it fall far behind after a stall
       nextFrameAt = Math.max(nextFrameAt + FRAME_MS, now);
       const rawDt = (now - lastFrame) / 1000;
       lastFrame = now;
       fpsAcc += rawDt;
       fpsFrames++;
       if (fpsAcc >= 1) {
-        hudFps.textContent = Math.round(fpsFrames / fpsAcc);
+        // In camera mode also show how long each hand reading takes, and
+        // which tracker is running (BG = background worker, MAIN = fallback)
+        const fps = fpsFrames / fpsAcc;
+        const fpsText = String(Math.round(fps));
+        hudFps.textContent = isCameraActive
+          ? `${fpsText} · HAND ${Math.round(trackMs)}ms ${handWorker ? 'BG' : 'MAIN'} · RES ${Math.round(renderScale * 100)}%`
+          : fpsText;
+        adaptRenderScale(fps);
         fpsAcc = 0;
         fpsFrames = 0;
       }

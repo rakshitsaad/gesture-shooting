@@ -1,0 +1,5 @@
+# Local-only files: the site only needs the game page and hand-worker.js
+.claude
+.env*
+serve.js
+start-game.bat
