@@ -157,7 +157,7 @@
     <div class="px-4 py-2 bg-zinc-950/85 border border-zinc-800 rounded-xl backdrop-blur flex items-center space-x-3">
       <div class="flex flex-col">
         <span class="text-[9px] font-hud text-zinc-500 uppercase tracking-widest">TACTICAL WEAPON</span>
-        <span class="text-sm font-bold font-hud text-amber-300">M4 CARBINE</span>
+        <span class="text-sm font-bold font-hud text-amber-300">GALIL ARM</span>
       </div>
       <div class="w-px h-7 bg-zinc-800"></div>
       <button id="btnToggleFlashlight" class="pointer-events-auto px-2.5 py-1 text-xs font-hud rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-yellow-400">
@@ -652,11 +652,11 @@
       spread: 0,
       hover: null
     };
-    // Viewmodel state: pose (px/py/ang, smoothed toward the crosshair) plus
+    // Viewmodel state: aim point (px/py, smoothed toward the crosshair) plus
     // recoil springs (kick, climb) and the bolt / trigger / flash animations
     const weapon = {
       flash: 0, muzzle: { x: 0, y: 0 }, port: { x: 0, y: 0 }, eject: { x: 0, y: -1 },
-      k: 0, px: null, py: 0, ang: -2.5, tilt: 0, lastX: 0,
+      k: 3, px: null, py: 0, tilt: 0, lastX: 0,
       kick: 0, kickV: 0, climb: 0, climbV: 0, bolt: 0, trig: 0
     };
     let pointerHeld = false;
@@ -2598,380 +2598,338 @@
     }
 
     /* ============================================================
-       11. WEAPON VIEWMODEL (M4-style carbine held in gloved hands)
+       11. WEAPON VIEWMODEL (Galil-style rifle in black tactical gloves)
        ------------------------------------------------------------
-       The rifle, both hands and both forearms are modelled in one
-       frame: x runs along the bore toward the muzzle and y points down
-       through the magazine (the rifle's top is -y). Every point goes
-       through a perspective divide (vp), so the stock end is close to
-       the eye and the muzzle recedes, like a real first-person view.
-       Because everything shares that frame, the hands can never drift
-       away from the gun.
+       A small low-poly 3D model, flat shaded and projected through a
+       pinhole camera at the player's eye, like a standard FPS viewmodel.
+       Model space is in cm: x to the rifle's right, y down, z along the
+       bore toward the muzzle, origin on the bore above the trigger. The
+       rifle sits low and right of the eye with its bore on the crosshair.
+       Each part is convex (or nearly), and the eye always sees the rifle
+       from above, left and behind, so back-face culling plus a fixed
+       far-to-near part order draws it correctly without a depth buffer.
        ============================================================ */
-    const VM_K = 0.0045;      // perspective strength along the barrel
-    const MUZZLE_X = 247;     // muzzle face, in rifle units
+    const MUZZLE_Z = 88;                   // flash hider face
+    const NEAR_Z = 2.5;                    // near clip plane, cm in front of the eye
+    const VM_OFFSET = [9, 6.5, 12];        // rifle origin from the eye: right, down, forward
+    const VM_CANT = -0.12;                 // slight roll so the rifle's top faces the eye
     const vmCanvas = makeCanvas(1, 1);
     const vctx = vmCanvas.getContext('2d');
-    let camoPattern = null, sleevePattern = null;
+    let vmParts = null;
 
-    const vScale = (x) => 1 / (1 + VM_K * x);
-    function vp(x, y) { const s = vScale(x); return [x * s, y * s]; }
+    const v3add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+    const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const v3scl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+    const v3dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const v3cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    const v3norm = (a) => v3scl(a, 1 / (Math.hypot(a[0], a[1], a[2]) || 1));
 
-    // Polygon through rifle-space points; `smooth` rounds it with quadratic curves
-    function vPath(pts, smooth = false) {
-      const m = pts.map(([x, y]) => vp(x, y));
-      vctx.beginPath();
-      if (!smooth) {
-        m.forEach((p, i) => (i ? vctx.lineTo(p[0], p[1]) : vctx.moveTo(p[0], p[1])));
-      } else {
-        const n = m.length, mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        const s = mid(m[n - 1], m[0]);
-        vctx.moveTo(s[0], s[1]);
-        for (let i = 0; i < n; i++) {
-          const e = mid(m[i], m[(i + 1) % n]);
-          vctx.quadraticCurveTo(m[i][0], m[i][1], e[0], e[1]);
-        }
+    // Matte black finishes, lit by the moon (upper left) and a warm street fill (lower right)
+    const MAT_GUN = { spec: 0.55, shin: 16 }, MAT_GLOVE = { spec: 0.3, shin: 8 }, MAT_CLOTH = { spec: 0.18, shin: 4 };
+    const C_GUN = [40, 42, 46], C_GUN_DK = [24, 25, 28], C_GUN_HG = [36, 37, 41], C_BORE = [8, 8, 9];
+    const C_GLOVE = [30, 30, 33], C_CUFF = [21, 21, 24], C_SLEEVE = [40, 41, 46], C_SLEEVE_DK = [29, 30, 34];
+    const VM_LIGHT = v3norm([-0.45, -0.8, -0.35]);
+    const VM_FILL = v3norm([0.6, 0.3, -0.5]);
+
+    // --- Mesh building -------------------------------------------
+    function vmPart(mat, dyn = null) { return { mat, dyn, faces: [] }; }
+    function addFace(part, pts, inside, col) { part.faces.push({ pts, inside, col }); }
+    // Solid between two matching rings of points; `inside` orients the face normals
+    function addLoft(part, A, B, col) {
+      const n = A.length, inside = [0, 1, 2].map((k) => (A.reduce((s, p) => s + p[k], 0) + B.reduce((s, p) => s + p[k], 0)) / (2 * n));
+      for (let i = 0; i < n; i++) { const j = (i + 1) % n; addFace(part, [A[i], A[j], B[j], B[i]], inside, col); }
+      addFace(part, A, inside, col);
+      addFace(part, B, inside, col);
+    }
+    function addBox(part, x0, x1, y0, y1, z0, z1, col) {
+      addLoft(part, [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]], [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], col);
+    }
+    // Side profile (y, z points) extruded across the rifle from x0 to x1
+    function addSlab(part, x0, x1, yz, col) {
+      addLoft(part, yz.map(([y, z]) => [x0, y, z]), yz.map(([y, z]) => [x1, y, z]), col);
+    }
+    // Cross-section (x, y points) extruded along the bore from z0 to z1
+    function addPrism(part, xy, z0, z1, col) {
+      addLoft(part, xy.map(([x, y]) => [x, y, z0]), xy.map(([x, y]) => [x, y, z1]), col);
+    }
+    // n-sided tube from a to b; `wob` roughens the radius like bunched fabric
+    function addTube(part, a, b, ra, rb, n, col, phase = 0, wob = null) {
+      const w = v3norm(v3sub(b, a));
+      const u = v3norm(v3cross(w, Math.abs(w[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), v = v3cross(w, u);
+      const ring = (c, r) => Array.from({ length: n }, (_, i) => {
+        const t = phase + (i / n) * Math.PI * 2, rr = r * (wob ? wob[i % wob.length] : 1);
+        return v3add(c, v3add(v3scl(u, Math.cos(t) * rr), v3scl(v, Math.sin(t) * rr)));
+      });
+      addLoft(part, ring(a, ra), ring(b, rb), col);
+    }
+    function addChain(part, pts, radii, n, col) {
+      for (let i = 0; i < pts.length - 1; i++) addTube(part, pts[i], pts[i + 1], radii[i], radii[i + 1], n, col);
+    }
+    // Hooded front sight: an annulus round the sight post, built from wedges
+    function addRing(part, cy, cz, rOut, rIn, half, n, col) {
+      const P = (r, a, z) => [Math.cos(a) * r, cy + Math.sin(a) * r, z];
+      for (let i = 0; i < n; i++) {
+        const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2, am = (a0 + a1) / 2;
+        const mid = P((rOut + rIn) / 2, am, cz);
+        addFace(part, [P(rOut, a0, cz - half), P(rOut, a1, cz - half), P(rOut, a1, cz + half), P(rOut, a0, cz + half)], mid, col);
+        addFace(part, [P(rIn, a0, cz - half), P(rIn, a1, cz - half), P(rIn, a1, cz + half), P(rIn, a0, cz + half)], mid, col);
+        for (const z of [cz - half, cz + half]) addFace(part, [P(rIn, a0, z), P(rOut, a0, z), P(rOut, a1, z), P(rIn, a1, z)], mid, col);
       }
-      vctx.closePath();
     }
-    function vBox(x0, x1, y0, y1) { vPath([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]); }
-    function vRect(x0, x1, y0, y1, fill) { vBox(x0, x1, y0, y1); vctx.fillStyle = fill; vctx.fill(); }
-    function vEllipse(cx, cy, rx, ry, n = 14) {
-      const pts = [];
-      for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; pts.push([cx + Math.cos(a) * rx, cy + Math.sin(a) * ry]); }
-      vPath(pts);
-    }
-    function vCapsule(ax, ay, bx, by, ra, rb = ra) {
-      const ang = Math.atan2(by - ay, bx - ax), pts = [];
-      for (let i = 0; i <= 6; i++) { const a = ang + Math.PI / 2 + (i / 6) * Math.PI; pts.push([ax + Math.cos(a) * ra, ay + Math.sin(a) * ra]); }
-      for (let i = 0; i <= 6; i++) { const a = ang - Math.PI / 2 + (i / 6) * Math.PI; pts.push([bx + Math.cos(a) * rb, by + Math.sin(a) * rb]); }
-      vPath(pts);
-    }
-    function vLine(x0, y0, x1, y1, stroke, w) {
-      const a = vp(x0, y0), b = vp(x1, y1);
-      vctx.beginPath(); vctx.moveTo(a[0], a[1]); vctx.lineTo(b[0], b[1]);
-      vctx.strokeStyle = stroke; vctx.lineWidth = w; vctx.stroke();
-    }
-    // Shading across the bore (the rifle's top is lit), sampled at position x
-    function vGrad(x, y0, y1, stops) {
-      const s = vScale(x);
-      const g = vctx.createLinearGradient(x * s, y0 * s, x * s, y1 * s);
-      for (const [o, col] of stops) g.addColorStop(o, col);
-      return g;
-    }
-    function vFill(fill, edge = 'rgba(4,5,6,0.9)', w = 0.7) {
-      vctx.fillStyle = fill; vctx.fill();
-      if (edge) { vctx.strokeStyle = edge; vctx.lineWidth = w; vctx.stroke(); }
-    }
-    const METAL = [[0, '#59616b'], [0.18, '#3a4048'], [0.6, '#22262b'], [1, '#121417']];
-    const POLY = [[0, '#34373b'], [0.4, '#1f2124'], [1, '#0e0f11']];
 
-    // Seamless camo tiles for the gloves (green, after the reference) and sleeves
-    function buildGlovePatterns() {
-      const R = seeded(77);
-      const tile = (base, blots) => {
-        const cv = makeCanvas(72, 72), c = cv.getContext('2d');
-        c.fillStyle = base; c.fillRect(0, 0, 72, 72);
-        for (const [col, n, rMin, rMax] of blots) {
-          c.fillStyle = col;
-          for (let i = 0; i < n; i++) {
-            const x = R() * 72, y = R() * 72, rx = rMin + R() * (rMax - rMin), ry = rx * (0.5 + R() * 0.6), rot = R() * Math.PI;
-            for (const ox of [-72, 0, 72]) for (const oy of [-72, 0, 72]) {
-              c.beginPath(); c.ellipse(x + ox, y + oy, rx, ry, rot, 0, Math.PI * 2); c.fill();
-            }
-          }
+    // Parts in far-to-near draw order
+    function buildViewmodel() {
+      const R = seeded(41);
+      const gun = (dyn) => vmPart(MAT_GUN, dyn), glove = (dyn) => vmPart(MAT_GLOVE, dyn), cloth = () => vmPart(MAT_CLOTH);
+      const wob = (n) => Array.from({ length: n }, () => 0.86 + R() * 0.28);
+      const gripFront = (y) => -1.5 - (y - 4.6) * 0.4;   // front edge of the raked pistol grip
+      // Long jacket sleeve, bunched into folds along the forearm
+      const sleeve = (part, a, b, ra, rb) => {
+        addTube(part, a, b, ra, rb, 11, C_SLEEVE, 0.3, wob(11));
+        for (const t of [0.14, 0.3, 0.47, 0.66]) {
+          const c = v3add(a, v3scl(v3sub(b, a), t)), d = v3scl(v3norm(v3sub(b, a)), 1.1), r = lerp(ra, rb, t) * 1.08;
+          addTube(part, v3sub(c, d), v3add(c, d), r * 0.95, r, 11, C_SLEEVE_DK, 1.0, wob(11));
         }
-        return vctx.createPattern(cv, 'repeat');
       };
-      camoPattern = tile('#5b7a27', [['#3f5a1a', 40, 2, 4.5], ['#7d9b37', 26, 1.5, 3], ['#22300f', 50, 0.8, 2]]);
-      sleevePattern = tile('#3c4130', [['#2b2f21', 24, 3.5, 7], ['#545640', 20, 2.5, 5], ['#1f2218', 20, 1, 2.5]]);
-    }
 
-    // --- Rifle --------------------------------------------------
-    function drawStock() {
-      // Buffer tube and collapsible stock running back toward the shoulder
-      vBox(-150, -50, -11, 3); vFill(vGrad(-100, -11, 3, METAL));
-      vPath([[-112, -16], [-160, -18], [-172, 30], [-152, 36], [-128, 16], [-112, 6]], true);
-      vFill(vGrad(-140, -18, 36, POLY));
-      vLine(-114, -15, -158, -17, 'rgba(150,160,175,0.35)', 0.8);
-    }
+      // Muzzle end: slotted flash hider, barrel, hooded front sight, gas block
+      const hider = gun(); addTube(hider, [0, 0, 80], [0, 0, MUZZLE_Z], 1.25, 1.2, 8, C_GUN, Math.PI / 8);
+      const slots = gun();
+      addBox(slots, -0.3, 0.3, -1.3, -1.05, 81.5, 86.5, C_BORE);
+      addBox(slots, -1.3, -1.05, -0.3, 0.3, 81.5, 86.5, C_BORE);
+      const barrel = gun(); addTube(barrel, [0, 0, 47], [0, 0, 80.5], 0.95, 0.9, 8, C_GUN, Math.PI / 8);
+      const fsBase = gun();
+      addTube(fsBase, [0, 0, 69.5], [0, 0, 74.5], 1.3, 1.3, 8, C_GUN, Math.PI / 8);
+      addSlab(fsBase, -0.9, 0.9, [[-0.8, 69.5], [-4.9, 70.7], [-4.9, 73.3], [-0.8, 74.5]], C_GUN);
+      const fsRing = gun(); addRing(fsRing, -6.6, 72, 1.95, 1.45, 0.65, 14, C_GUN);
+      const fsPost = gun(); addBox(fsPost, -0.22, 0.22, -6.95, -5.1, 71.8, 72.2, C_GUN);
+      const gas = gun(); addBox(gas, -1.3, 1.3, -3.7, 1.25, 50, 54.5, C_GUN);
 
-    function drawLower() {
-      // Curved 30-round magazine
-      vPath([[6, 14], [30, 14], [33, 36], [39, 58], [47, 76], [26, 82], [18, 62], [12, 38]]);
-      vFill(vGrad(26, 14, 82, POLY));
-      for (const [a, b] of [[[17, 58], [39, 57]], [[19, 65], [42, 63.5]], [[21.5, 72], [45, 70]]]) {
-        vLine(a[0], a[1], b[0], b[1], 'rgba(0,0,0,0.65)', 1.4);
-        vLine(a[0], a[1] - 1.2, b[0], b[1] - 1.2, 'rgba(150,160,175,0.14)', 0.6);
+      // Support hand cupping the lower-left of the handguard: fingers wrap under
+      // and up the far side, thumb over the top (L is where it sits along the bore)
+      const L = 27;
+      const lFingers = glove();
+      for (const [z, r] of [[1.6, 0.82], [3.5, 0.86], [5.4, 0.86], [7.3, 0.8]]) {
+        addChain(lFingers, [[0.4, 4.9, L + z], [2.9, 3.4, L + z + 0.3], [3.6, 0.7, L + z + 0.5], [3.0, -1.4, L + z + 0.6]], [r, r, r * 0.92, r * 0.8], 6, C_GLOVE);
       }
-      vLine(30, 15, 33, 36, 'rgba(170,180,195,0.3)', 0.8);
-      vLine(33, 36, 39, 58, 'rgba(170,180,195,0.25)', 0.8);
-      vPath([[24, 79], [48, 73], [50, 79], [27, 86]]); vFill('#141517');
+      const lPalm = glove();
+      const palm = [[-3.9, 0.9], [0.1, 4.9], [-1.8, 6.7], [-5.7, 2.8]];   // band hugging the handguard
+      addLoft(lPalm, palm.map(([x, y]) => [x, y, L - 0.5]), palm.map(([x, y]) => [x, y, L + 9]), C_GLOVE);
 
-      // Pistol grip (mostly inside the hand)
-      vPath([[-38, 14], [-19, 14], [-23, 34], [-27, 58], [-46, 62], [-48, 52], [-43, 30]], true);
-      vFill(vGrad(-32, 14, 62, POLY));
+      // Ribbed handguard and gas-tube cover
+      const hg = gun(); addTube(hg, [0, 1, 27.5], [0, 1, 49.5], 3.0, 2.9, 8, C_GUN_HG, Math.PI / 8);
+      const hgRibs = gun();
+      for (const y of [0.3, 1.0, 1.7]) addBox(hgRibs, -3.0, -2.6, y - 0.17, y + 0.17, 29, 48, C_GUN_HG);
+      const hgTop = gun(); addTube(hgTop, [0, -2.5, 27.5], [0, -2.5, 47.5], 1.8, 1.7, 8, C_GUN_HG, Math.PI / 8);
+      const hgTopRibs = gun();
+      for (const x of [-0.9, 0, 0.9]) addBox(hgTopRibs, x - 0.3, x + 0.3, -4.45, -4.1, 29, 46, C_GUN_HG);
 
-      // Lower receiver with its flared magazine well
-      vPath([[-50, 1], [36, 1], [37, 20], [4, 20], [1, 14], [-40, 15], [-50, 9]]);
-      vFill(vGrad(-5, 1, 20, [[0, '#3a3f46'], [0.5, '#24272c'], [1, '#141619']]));
+      // Support arm: glove cuff and jacket sleeve running back to the bottom-left
+      const lCuff = glove(); addTube(lCuff, [-2.9, 4.0, L + 1.2], [-5.6, 6.0, L - 3.6], 2.3, 2.5, 8, C_CUFF);
+      const lArm = cloth(); sleeve(lArm, [-5.2, 5.8, L - 3.0], [-30, 9, 2], 3.0, 5.8);
+      const lThumb = glove();
+      addChain(lThumb, [[-3.7, 0.6, L + 5.5], [-3.1, -1.5, L + 8.5], [-2.0, -2.9, L + 11.5]], [1.0, 0.92, 0.8], 6, C_GLOVE);
+      // Moulded knuckle armour across the back of the support hand
+      for (const z of [1.5, 4, 6.5]) addBox(lThumb, -5.0, -4.1, 1.4, 2.6, L + z, L + z + 1.8, C_CUFF);
 
-      // Trigger guard and trigger (the trigger moves back on each shot)
-      const tg = [[2, 15], [1, 23], [-17, 24.5], [-21, 15]].map(([x, y]) => vp(x, y));
-      vctx.beginPath(); tg.forEach((p, i) => (i ? vctx.lineTo(p[0], p[1]) : vctx.moveTo(p[0], p[1])));
-      vctx.strokeStyle = '#17191c'; vctx.lineWidth = 2.6; vctx.lineJoin = 'round'; vctx.stroke();
-      const tp = weapon.trig * 1.5;
-      const tr = [[-5 - tp, 14], [-4 - tp, 19], [-7 - tp, 22]].map(([x, y]) => vp(x, y));
-      vctx.beginPath(); vctx.moveTo(tr[0][0], tr[0][1]); vctx.quadraticCurveTo(tr[1][0], tr[1][1], tr[2][0], tr[2][1]);
-      vctx.strokeStyle = '#2a2d31'; vctx.lineWidth = 2.2; vctx.lineCap = 'round'; vctx.stroke();
+      // Rear sight block with protective ears round the notch
+      const rsBlock = gun(); addBox(rsBlock, -1.7, 1.7, -3.3, -1.5, 20.8, 27.4, C_GUN);
+      const rsEars = gun();
+      addBox(rsEars, -1.75, -1.0, -6.3, -3.3, 23.2, 25.2, C_GUN);
+      addBox(rsEars, 1.0, 1.75, -6.3, -3.3, 23.2, 25.2, C_GUN);
+      addBox(rsEars, -1.0, 1.0, -4.4, -3.3, 23.5, 24.9, C_GUN_DK);
 
-      // Selector lever, magazine release and pins
-      vPath([[-40, 6], [-29, 3], [-28, 6.5], [-39, 9]]); vFill('#1a1c1f');
-      vEllipse(-1, 8, 2.8, 2.8, 10); vFill('#15171a');
-      vEllipse(-12, 7, 1.4, 1.4, 8); vFill('#0d0e10', null);
-      vEllipse(-26, 9, 1.4, 1.4, 8); vFill('#0d0e10', null);
-    }
+      // Curved 35-round magazine, magazine release and pistol grip
+      const mag = gun();
+      addSlab(mag, -1.35, 1.35, [[4.4, 8.6], [10, 9.6], [15.4, 11.3], [20.4, 13.6], [20.4, 21.2], [15.4, 18.8], [10, 16.8], [4.4, 15.4]], C_GUN);
+      const magPlate = gun(); addSlab(magPlate, -1.6, 1.6, [[20.2, 13.4], [20.2, 21.6], [21.3, 21.9], [21.3, 13.5]], C_GUN_DK);
+      const magRel = gun(); addBox(magRel, -0.7, 0.7, 4.6, 6.1, 7.6, 8.6, C_GUN_DK);
+      const grip = gun(); addSlab(grip, -1.4, 1.4, [[4.6, -6.0], [4.6, -1.5], [14.5, -5.5], [14.5, -9.5]], C_GUN);
 
-    function drawUpper() {
-      vPath([[-56, -13], [42, -13], [42, 1], [-50, 1], [-56, -5]]);
-      vFill(vGrad(-5, -13, 1, METAL));
-      // Forward assist and brass deflector
-      vEllipse(-40, -5, 5, 5, 14); vFill(vGrad(-40, -10, 0, METAL));
-      vEllipse(-40, -5, 2.6, 2.6, 10); vFill('#15171a', null);
-      vPath([[-24, -13], [-15, -13], [-15, -6], [-21, -5]]); vFill(vGrad(-20, -13, -5, METAL));
-      // Ejection port, with the bolt carrier cycling back on each shot
-      vRect(-12, 18, -10, -2.5, '#08090a');
-      const bo = -weapon.bolt * 9;
-      vRect(-10 + bo, 15 + bo, -8.8, -3.8, vGrad(2, -9, -4, [[0, '#a59a7c'], [0.5, '#6b6352'], [1, '#2e2a22']]));
-      vLine(-10 + bo, -8.6, 15 + bo, -8.6, 'rgba(255,240,200,0.35)', 0.6);
-      // Open dust cover hanging below the port
-      vPath([[-12, -2.5], [18, -2.5], [17, 0.5], [-11, 0.5]]); vFill('#1b1e22');
-      // Charging handle
-      vPath([[-66, -17], [-54, -17], [-54, -11], [-62, -11], [-68, -14]]); vFill(vGrad(-60, -17, -11, METAL));
-      vLine(-54, -12.6, 42, -12.6, 'rgba(170,185,205,0.45)', 0.7);
-    }
-
-    function drawHandguard() {
-      // Barrel
-      vPath([[150, -5], [214, -4.4], [214, 3.6], [150, 4]]); vFill(vGrad(180, -5, 4, METAL));
-      // Slotted muzzle brake in a worn bronze finish, like the reference
-      vPath([[212, -8], [MUZZLE_X, -7.4], [MUZZLE_X, 6.6], [212, 7.2]]);
-      vFill(vGrad(228, -8, 7, [[0, '#b7a265'], [0.25, '#8a7744'], [0.65, '#544823'], [1, '#2a2411']]));
-      for (let x = 218; x < MUZZLE_X - 5; x += 7) vRect(x, x + 3.6, -5.6, -1.4, '#17130a');
-      vLine(212, -7.4, MUZZLE_X, -6.9, 'rgba(255,235,180,0.45)', 0.6);
-      vRect(MUZZLE_X - 2, MUZZLE_X, -7.4, 6.6, '#3a311a');
-
-      // Quad-rail handguard
-      vBox(40, 156, -13, 13); vFill(vGrad(98, -13, 13, METAL));
-      for (let x = 46; x < 146; x += 13) { vRect(x, x + 9, -10.5, -6.5, '#101215'); vRect(x, x + 9, 6, 10, '#101215'); }
-      vRect(40, 156, -4, 3, '#24282d');
-      vRect(40, 156, 13, 18, '#1d2024');
-      for (let x = 42; x < 154; x += 5) { vRect(x, x + 2.2, -4, 3, '#0b0c0e'); vRect(x, x + 2.2, 13, 18, '#0b0c0e'); }
-      vLine(40, -3.6, 156, -3.6, 'rgba(160,175,195,0.35)', 0.5);
-      // Barrel nut, end cap and gas block
-      vBox(36, 42, -14, 14); vFill(vGrad(39, -14, 14, METAL));
-      vBox(154, 159, -14, 15); vFill(vGrad(156, -14, 15, METAL));
-      vBox(159, 172, -6, 6); vFill(vGrad(165, -6, 6, METAL));
-
-      // Weapon light on the side rail
-      vRect(128, 136, 2, 5, '#141619');
-      vBox(122, 146, 4, 14); vFill(vGrad(134, 4, 14, [[0, '#4a4f56'], [0.3, '#24272b'], [1, '#0c0d0f']]));
-      for (let x = 125; x < 142; x += 3) vLine(x, 4.4, x, 13.6, 'rgba(0,0,0,0.45)', 0.6);
-      vBox(144, 154, 2.5, 15.5); vFill(vGrad(149, 2.5, 15.5, [[0, '#5a6069'], [0.3, '#2b2f34'], [1, '#0e1012']]));
-      vLine(144, 3, 154, 3, 'rgba(210,220,235,0.5)', 0.5);
-    }
-
-    function drawTopRailAndSights() {
-      // Continuous top rail from the receiver to the front of the handguard
-      vBox(-56, 156, -19, -13); vFill(vGrad(50, -19, -13, [[0, '#30353b'], [1, '#16181b']]));
-      vRect(-56, 156, -22, -19, '#3f454d');
-      for (let x = -54; x < 154; x += 5) vRect(x, x + 2.4, -22, -16.5, '#0b0c0e');
-      vLine(-56, -22, 156, -22, 'rgba(180,195,215,0.5)', 0.6);
-      // Rear flip-up sight
-      vPath([[-34, -22], [-16, -22], [-19, -29], [-24, -34], [-30, -30]], true); vFill(vGrad(-25, -34, -22, METAL));
-      vEllipse(-24, -28, 1.6, 1.6, 8); vFill('#060708', null);
-      // Front sight post
-      vPath([[150, -19], [172, -19], [167, -28], [164, -40], [158, -40], [155, -28]]); vFill(vGrad(161, -40, -19, METAL));
-      vRect(158.5, 163.5, -33, -25, '#07080a');
-      vRect(160, 162, -46, -40, '#1f2226');
-      // Tan laser module on the top rail
-      vBox(102, 132, -33, -22); vFill(vGrad(117, -33, -22, [[0, '#c9b083'], [0.4, '#a48d61'], [1, '#5f513a']]));
-      vRect(102, 132, -36, -33, '#d8c393');
-      vRect(126, 131, -30, -25, '#2a1608');
-      vRect(106, 112, -30, -25, '#3b2f1f');
-    }
-
-    // --- Gloved hands & sleeves ---------------------------------
-    function gloveFill(x, y0, y1) {
-      vctx.fillStyle = camoPattern; vctx.fill();
-      vctx.fillStyle = vGrad(x, y0, y1, [[0, 'rgba(255,255,220,0.14)'], [0.4, 'rgba(0,0,0,0.05)'], [1, 'rgba(0,0,0,0.55)']]);
-      vctx.fill();
-      vctx.strokeStyle = 'rgba(10,14,4,0.85)'; vctx.lineWidth = 0.8; vctx.stroke();
-    }
-
-    // One finger segment, shaded round across its width (lit from the rifle's top)
-    function fingerSeg(ax, ay, bx, by, ra, rb = ra) {
-      vCapsule(ax, ay, bx, by, ra, rb);
-      vctx.fillStyle = camoPattern; vctx.fill();
-      const len = Math.hypot(bx - ax, by - ay) || 1;
-      let nx = -(by - ay) / len, ny = (bx - ax) / len;
-      if (ny > 0) { nx = -nx; ny = -ny; }
-      const r = (ra + rb) / 2, cx = (ax + bx) / 2, cy = (ay + by) / 2;
-      const a = vp(cx + nx * r, cy + ny * r), b = vp(cx - nx * r, cy - ny * r);
-      const g = vctx.createLinearGradient(a[0], a[1], b[0], b[1]);
-      g.addColorStop(0, 'rgba(255,255,220,0.2)');
-      g.addColorStop(0.35, 'rgba(0,0,0,0)');
-      g.addColorStop(1, 'rgba(0,0,0,0.6)');
-      vctx.fillStyle = g; vctx.fill();
-      vctx.strokeStyle = 'rgba(10,14,4,0.85)'; vctx.lineWidth = 0.7; vctx.stroke();
-    }
-
-    // Moulded black knuckle armour: a short rubber plate along the finger
-    function knuckleBar(ax, ay, bx, by, r) {
-      vCapsule(ax, ay, bx, by, r);
-      vFill('#1b1e17', 'rgba(0,0,0,0.85)', 0.5);
-      vCapsule(ax, ay - r * 0.35, bx, by - r * 0.35, r * 0.4);   // lit upper edge
-      vctx.fillStyle = 'rgba(205,220,200,0.13)'; vctx.fill();
-    }
-
-    // Sleeved forearm from the wrist (wx, wy) along unit direction (dx, dy)
-    function drawForearm(wx, wy, dx, dy, len, w0, w1) {
-      const nx = -dy, ny = dx, ex = wx + dx * len, ey = wy + dy * len;
-      vPath([[wx + nx * w0, wy + ny * w0], [ex + nx * w1, ey + ny * w1], [ex - nx * w1, ey - ny * w1], [wx - nx * w0, wy - ny * w0]]);
-      vctx.fillStyle = sleevePattern; vctx.fill();
-      const mx = wx + dx * 30, my = wy + dy * 30, w = w0 * 1.15;
-      const a = vp(mx + nx * w, my + ny * w), b = vp(mx - nx * w, my - ny * w);
-      const g = vctx.createLinearGradient(a[0], a[1], b[0], b[1]);
-      g.addColorStop(0, 'rgba(0,0,0,0.6)');
-      g.addColorStop(0.3, 'rgba(255,255,230,0.07)');
-      g.addColorStop(0.6, 'rgba(0,0,0,0.1)');
-      g.addColorStop(1, 'rgba(0,0,0,0.65)');
-      vctx.fillStyle = g; vctx.fill();
-      // Fabric folds
-      for (const t of [0.18, 0.32, 0.5]) {
-        const px = wx + dx * len * t, py = wy + dy * len * t, ww = lerp(w0, w1, t);
-        vLine(px + nx * ww * 0.95, py + ny * ww * 0.95, px + nx * ww * 0.2 + dx * 5, py + ny * ww * 0.2 + dy * 5, 'rgba(0,0,0,0.35)', 1.1);
+      // Firing hand wrapped round the grip, fingers curled across its front
+      const rHand = glove();
+      addLoft(rHand, [[-1.9, 5.0, -8.8], [3.4, 5.0, -8.8], [3.6, 13.4, -12.0], [-1.7, 13.4, -12.0]],
+                     [[-1.9, 5.0, -2.4], [3.4, 5.0, -2.4], [3.6, 13.4, -6.0], [-1.7, 13.4, -6.0]], C_GLOVE);
+      const rFingers = glove();
+      for (const y of [8.2, 10.1, 11.9]) {
+        const zf = gripFront(y);
+        addChain(rFingers, [[3.0, y, zf - 2.0], [2.4, y + 0.1, zf + 0.9], [-0.6, y + 0.2, zf + 1.2], [-2.1, y + 0.1, zf - 0.8]], [0.9, 0.9, 0.86, 0.78], 6, C_GLOVE);
       }
-      // Neoprene glove cuff with a velcro tab
-      const c0 = w0 + 1.5, c1 = w0 + 2.5;
-      vPath([[wx - dx * 3 + nx * c0, wy - dy * 3 + ny * c0], [wx + dx * 12 + nx * c1, wy + dy * 12 + ny * c1],
-             [wx + dx * 12 - nx * c1, wy + dy * 12 - ny * c1], [wx - dx * 3 - nx * c0, wy - dy * 3 - ny * c0]]);
-      vFill('#171914', 'rgba(0,0,0,0.9)', 0.6);
-      vPath([[wx + dx * 1 + nx * c0 * 0.9, wy + dy * 1 + ny * c0 * 0.9], [wx + dx * 9 + nx * c1 * 0.95, wy + dy * 9 + ny * c1 * 0.95],
-             [wx + dx * 9 + nx * c1 * 0.1, wy + dy * 9 + ny * c1 * 0.1], [wx + dx * 1 + nx * c0 * 0.1, wy + dy * 1 + ny * c0 * 0.1]]);
-      vFill('#23261e', 'rgba(0,0,0,0.6)', 0.5);
+      // Index finger and trigger move back together on each shot
+      const rIndex = glove((p) => {
+        const t = weapon.trig * 0.6;
+        addChain(p, [[2.8, 5.6, -2.8], [1.4, 5.8, 0.9], [0.5, 6.3, 2.3 - t], [0.0, 7.3, 2.0 - t]], [0.92, 0.86, 0.78, 0.7], 6, C_GLOVE);
+      });
+      const trigger = gun((p) => {
+        const t = weapon.trig * 0.6;
+        addSlab(p, -0.3, 0.3, [[4.6, 1.2 - t], [4.6, 2.0 - t], [6.6, 1.6 - t], [7.0, 0.9 - t]], C_GUN_DK);
+      });
+      const guard = gun();
+      addBox(guard, -0.4, 0.4, 7.6, 8.2, -2.4, 6.4, C_GUN);
+      addBox(guard, -0.4, 0.4, 4.6, 7.6, 5.8, 6.4, C_GUN);
+      // Galil's raised charging handle on the right, cycling with the bolt
+      const handle = gun((p) => {
+        const b = -weapon.bolt * 5;
+        addChain(p, [[1.8, -2.3, 12 + b], [3.4, -2.5, 12 + b], [3.7, -3.9, 12.4 + b]], [0.36, 0.36, 0.48], 6, C_GUN);
+      });
+
+      // Receiver, selector lever and the ribbed top cover
+      const lower = gun(); addBox(lower, -1.9, 1.9, -1.6, 4.6, -9, 22, C_GUN);
+      const rivets = gun();
+      for (const [y, z] of [[2.6, -6], [2.6, 4.5], [0.4, 16]]) addBox(rivets, -2.02, -1.9, y - 0.3, y + 0.3, z - 0.3, z + 0.3, C_GUN_DK);
+      const selector = gun();
+      addSlab(selector, -2.32, -1.9, [[-0.7, -7.5], [-0.7, 2.0], [0.3, 2.0], [0.6, -7.5]], C_GUN_DK);
+      const cover = gun(); addPrism(cover, [[-1.95, -1.6], [-1.3, -3.4], [1.3, -3.4], [1.95, -1.6]], -8.6, 20.6, C_GUN);
+      const ribs = gun();
+      for (const x of [-0.75, 0.75]) addBox(ribs, x - 0.2, x + 0.2, -3.62, -3.3, -7.5, 19.5, C_GUN);   // stamped ribs
+
+      // Folding skeleton stock, running back past the eye
+      const stock = gun();
+      addTube(stock, [0, -0.9, -9], [0, -0.4, -42], 0.75, 0.75, 6, C_GUN);
+      addTube(stock, [0, 3.8, -9], [0, 6.6, -40], 0.75, 0.75, 6, C_GUN);
+
+      // Firing hand's thumb along the receiver, then its cuff and sleeve
+      const rThumb = glove(); addChain(rThumb, [[-1.4, 5.0, -7.2], [-2.4, 3.0, -4.2], [-2.55, 1.2, 0.4]], [1.1, 0.98, 0.84], 6, C_GLOVE);
+      const rCuff = glove(); addTube(rCuff, [1.0, 10.0, -10.2], [2.8, 13.2, -15.4], 2.4, 2.7, 8, C_CUFF);
+      const rArm = cloth(); sleeve(rArm, [2.6, 12.9, -14.8], [11, 27, -42], 3.3, 5.6);
+
+      return [hider, slots, barrel, fsBase, fsRing, fsPost, gas, lFingers, lPalm, hg, hgRibs, hgTop, hgTopRibs,
+        lCuff, lArm, lThumb, rsBlock, rsEars, mag, magPlate, magRel, grip, rHand, rFingers, rIndex, trigger, guard,
+        handle, lower, rivets, selector, cover, ribs, stock, rThumb, rCuff, rArm];
     }
 
-    function drawRightHand() {
-      // Palm and back of the hand wrapped around the pistol grip
-      vPath([[-52, 16], [-42, 8], [-28, 7], [-19, 13], [-17, 24], [-19, 40], [-23, 56], [-32, 66], [-46, 72], [-58, 66], [-60, 46], [-58, 28]], true);
-      gloveFill(-38, 7, 72);
-      // Black ribbed panel across the back of the hand
-      vPath([[-50, 18], [-37, 12], [-32, 30], [-34, 52], [-44, 60], [-54, 50], [-55, 30]], true);
-      vFill('#161813', 'rgba(0,0,0,0.8)', 0.6);
-      for (let i = 0; i < 4; i++) vLine(-53, 24 + i * 8, -35, 21 + i * 9, 'rgba(140,150,125,0.16)', 0.8);
-      // Thumb lying along the receiver
-      fingerSeg(-50, 20, -38, 7, 6.4, 5.8);
-      fingerSeg(-38, 7, -24, 2.5, 5.6, 4.6);
-      // Middle, ring and little fingers curled round the front of the grip
-      fingerSeg(-34, 44, -19, 47, 4.8, 4.6); fingerSeg(-19, 47, -20, 53, 4.4, 3.8);
-      fingerSeg(-32, 33, -15, 36, 5.2, 5);   fingerSeg(-15, 36, -16, 42, 4.7, 4);
-      fingerSeg(-31, 22, -13, 25, 5.4, 5.2); fingerSeg(-13, 25, -13, 31, 4.9, 4.2);
-      knuckleBar(-31, 21.6, -23, 22.8, 3.3); knuckleBar(-32, 32.6, -24, 34, 3.1); knuckleBar(-34, 43.6, -27, 45, 2.8);
-      knuckleBar(-15, 24, -13, 28.5, 2.6); knuckleBar(-17, 35, -15, 39.5, 2.5); knuckleBar(-20, 46.5, -19, 50.5, 2.3);
-      // Index finger on the trigger, squeezing back slightly on each shot
-      const tp = weapon.trig * 1.5;
-      fingerSeg(-28, 12, -13, 14.5, 5.2, 4.8);
-      fingerSeg(-13, 14.5, -4 - tp, 16.5, 4.6, 4.2);
-      fingerSeg(-4 - tp, 16.5, -5 - tp, 21.5, 4, 3.6);
-      knuckleBar(-28, 11.4, -20, 12.6, 3.2);
-      knuckleBar(-11, 14.4, -7 - tp, 15.4, 2.6);
+    // --- Pose, projection & drawing --------------------------------
+    function vmBasis(fw, roll) {
+      const r0 = v3norm(v3cross(fw, [0, -1, 0])), d0 = v3cross(fw, r0);
+      const c = Math.cos(roll), s = Math.sin(roll);
+      return { f: fw, r: v3add(v3scl(r0, c), v3scl(d0, s)), d: v3sub(v3scl(d0, c), v3scl(r0, s)) };
     }
 
-    // Support hand clamped round the handguard: back of the hand toward the
-    // camera, three fingers curled over the rail, index finger laid forward
-    const LEFT_HAND_X = 68;   // where the support hand grips the handguard
+    // Where the rifle is this frame, as model -> eye-space -> screen mappings
+    function weaponFrame() {
+      const f = Math.min(H, W * 0.75) * 0.95, cx = W / 2, cy = H / 2;
+      const sx = (weapon.px - cx) / f, sy = (weapon.py - cy) / f;
+      // The rifle is carried by a view turned part-way toward the aim, so it
+      // swings with the crosshair but stays low and right of it on screen
+      const view = vmBasis(v3norm([sx * 0.55, sy * 0.5, 1]), 0);
+      const bobX = Math.sin(time * 0.9) * 0.18, bobY = Math.sin(time * 1.8 + 0.6) * 0.25;   // breathing
+      const o = v3add(v3add(v3scl(view.r, VM_OFFSET[0] + bobX), v3scl(view.d, VM_OFFSET[1] + bobY)), v3scl(view.f, VM_OFFSET[2]));
+      // Bore on the crosshair 25 m out, lifted by recoil climb, kicked back along itself
+      const aim = v3scl(v3norm([sx, sy, 1]), 2500);
+      const b0 = vmBasis(v3norm(v3sub(aim, o)), 0);
+      const fw = v3norm(v3sub(v3scl(b0.f, Math.cos(weapon.climb)), v3scl(b0.d, Math.sin(weapon.climb))));
+      const B = vmBasis(fw, VM_CANT + weapon.tilt);
+      const org = v3sub(o, v3scl(B.f, weapon.kick * 0.4));
+      const toCam = (p) => [
+        org[0] + B.r[0] * p[0] + B.d[0] * p[1] + B.f[0] * p[2],
+        org[1] + B.r[1] * p[0] + B.d[1] * p[1] + B.f[1] * p[2],
+        org[2] + B.r[2] * p[0] + B.d[2] * p[1] + B.f[2] * p[2]
+      ];
+      const proj = (q) => [cx + (f * q[0]) / q[2], cy + (f * q[1]) / q[2]];
+      return { f, toCam, proj, fw };
+    }
 
-    function drawLeftHand() {
-      const X = LEFT_HAND_X;
-      vPath([[X - 26, 32], [X - 24, 16], [X - 16, 7], [X - 2, 3], [X + 16, 3], [X + 26, 9], [X + 22, 22], [X + 8, 32], [X - 8, 40]], true);
-      gloveFill(X, 3, 40);
-      for (const [x, r] of [[X - 10, 5], [X - 0.5, 5.4], [X + 9, 5.5]]) {
-        fingerSeg(x, 6, x + 5, -5, r, r * 0.95);
-        fingerSeg(x + 5, -5, x + 9, -13, r * 0.94, r * 0.85);
-        fingerSeg(x + 9, -13, x + 12, -18.5, r * 0.84, r * 0.72);
-        knuckleBar(x - 0.6, 7.5, x + 1.6, 1.5, r * 0.62);   // knuckle armour
-        knuckleBar(x + 3.6, -2, x + 6.4, -8, r * 0.55);
+    // Cut a polygon at the near plane so parts reaching past the eye still draw
+    function clipNear(pts) {
+      const out = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length], ina = a[2] >= NEAR_Z, inb = b[2] >= NEAR_Z;
+        if (ina) out.push(a);
+        if (ina !== inb) {
+          const t = (NEAR_Z - a[2]) / (b[2] - a[2]);
+          out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR_Z]);
+        }
       }
-      fingerSeg(X + 16, 6, X + 30, 2, 4.9, 4.5);
-      fingerSeg(X + 30, 2, X + 43, 0, 4.4, 3.8);
-      knuckleBar(X + 15.5, 6.5, X + 19, 4, 3);
-      knuckleBar(X + 21, 3.5, X + 28, 2.3, 2.4);
+      return out;
     }
 
-    function drawMuzzleFlash() {
-      const f = weapon.flash, s = vScale(MUZZLE_X);
-      const [mx, my] = vp(MUZZLE_X, -0.5);
+    function shadeVm(col, n, c, mat) {
+      const v = v3norm(v3scl(c, -1)), h = v3norm(v3add(VM_LIGHT, v));
+      const dif = Math.max(0, v3dot(n, VM_LIGHT)), fill = Math.max(0, v3dot(n, VM_FILL)) * 0.35;
+      const sp = mat.spec * Math.pow(Math.max(0, v3dot(n, h)), mat.shin);
+      const rim = Math.pow(1 - Math.abs(v3dot(n, v)), 4) * mat.spec * 0.55;   // edges catch the sky
+      const k = 0.3 + dif * 1.15;
+      const r = Math.min(255, col[0] * (k + fill) + sp * 150 + rim * 70);
+      const g = Math.min(255, col[1] * (k + fill * 0.75) + sp * 165 + rim * 80);
+      const b = Math.min(255, col[2] * (k + fill * 0.55) + sp * 190 + rim * 100);
+      return `rgb(${r | 0},${g | 0},${b | 0})`;
+    }
+
+    function drawVmPart(part, F) {
+      if (part.dyn) { part.faces.length = 0; part.dyn(part); }
+      const list = [];
+      for (const face of part.faces) {
+        const pts = face.pts.map(F.toCam);
+        // Newell normal, turned to point away from the solid's interior
+        let n = [0, 0, 0], c = [0, 0, 0];
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[i], b = pts[(i + 1) % pts.length];
+          n[0] += (a[1] - b[1]) * (a[2] + b[2]);
+          n[1] += (a[2] - b[2]) * (a[0] + b[0]);
+          n[2] += (a[0] - b[0]) * (a[1] + b[1]);
+          c = v3add(c, a);
+        }
+        c = v3scl(c, 1 / pts.length);
+        if (v3dot(n, v3sub(c, F.toCam(face.inside))) < 0) n = v3scl(n, -1);
+        if (v3dot(n, c) >= 0) continue;          // facing away from the eye
+        const clipped = clipNear(pts);
+        if (clipped.length < 3) continue;
+        list.push({ d: v3dot(c, c), pts: clipped, col: shadeVm(face.col, v3norm(n), c, part.mat) });
+      }
+      list.sort((a, b) => b.d - a.d);
+      for (const f of list) {
+        vctx.beginPath();
+        for (let i = 0; i < f.pts.length; i++) {
+          const [x, y] = F.proj(f.pts[i]);
+          if (i) vctx.lineTo(x, y); else vctx.moveTo(x, y);
+        }
+        vctx.closePath();
+        vctx.fillStyle = f.col; vctx.fill();
+        vctx.strokeStyle = f.col; vctx.stroke();   // hides seams between faces
+      }
+    }
+
+    function drawMuzzleFlash(F) {
+      const m = F.toCam([0, 0, MUZZLE_Z + 0.5]);
+      if (m[2] < NEAR_Z) return;
+      const [mx, my] = F.proj(m), s = F.f / m[2], fl = weapon.flash;
+      const R = (7 + Math.random() * 3.5) * s * fl;
       ctx.save();
       ctx.translate(mx, my);
-      ctx.scale(s, s);
-      const len = (55 + Math.random() * 30) * f, wid = (10 + Math.random() * 6) * f;
-      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, len * 1.2);
+      ctx.rotate(Math.random() * Math.PI);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, R * 1.2);
       g.addColorStop(0, 'rgba(255,255,235,1)');
       g.addColorStop(0.2, 'rgba(255,220,120,0.95)');
       g.addColorStop(0.55, 'rgba(255,120,30,0.6)');
       g.addColorStop(1, 'rgba(255,60,0,0)');
       ctx.fillStyle = g;
       ctx.beginPath();
-      const spikes = 7;
+      const spikes = 8;
       for (let i = 0; i < spikes * 2; i++) {
         const a = (i / (spikes * 2)) * Math.PI * 2;
-        const rr = i % 2 === 0 ? Math.abs(Math.cos(a)) * len * 0.85 + wid : wid * 0.45;
-        const xr = Math.cos(a) * rr * (Math.cos(a) > 0 ? 1.2 : 0.35), yr = Math.sin(a) * rr * 0.8;
-        if (i === 0) ctx.moveTo(xr, yr); else ctx.lineTo(xr, yr);
+        const rr = i % 2 === 0 ? R * (0.75 + Math.random() * 0.45) : R * 0.32;
+        if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr); else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
       }
       ctx.closePath();
       ctx.fill();
-      // Side jets from the muzzle-brake ports
-      for (const sy of [-1, 1]) {
-        ctx.beginPath(); ctx.ellipse(-14, sy * 10 * f, 14 * f, 4 * f, sy * 0.5, 0, Math.PI * 2); ctx.fill();
-      }
       ctx.restore();
     }
 
-    // Viewmodel pose & animation. Runs in the fixed-step update, so the motion
+    // Viewmodel aim & animation. Runs in the fixed-step update, so the motion
     // is identical at any frame rate.
     function updateWeapon(dt) {
-      const k = Math.min(H, W * 0.8) * 0.0042;
-      const reach = MUZZLE_X * vScale(MUZZLE_X) * k;
-      // The rifle sits low and right of the crosshair with its barrel on it;
-      // aiming right swings it more upright instead of pushing it off-screen
-      let px = clamp(lerp(W * 0.58, W * 0.94, reticle.x / W), W * 0.42, W * 1.08);
-      let py = clamp(reticle.y + H * 0.27, H * 0.68, H * 0.95);
-      const dx = reticle.x - px, dy = reticle.y - py, d = Math.hypot(dx, dy) || 1;
-      if (d < reach * 1.15) {           // keep the muzzle short of the crosshair
-        const f = (reach * 1.15) / d;
-        px = reticle.x - dx * f;
-        py = reticle.y - dy * f;
-      }
-      let ang = Math.atan2(reticle.y - py, reticle.x - px);
-      if (ang > 0) ang -= Math.PI * 2;
-      ang = clamp(ang, -Math.PI * 1.05, -Math.PI * 0.53);
-
-      if (weapon.px === null || weapon.k !== k) {
-        weapon.px = px; weapon.py = py; weapon.ang = ang; weapon.k = k; weapon.lastX = reticle.x;
-      }
+      if (!(dt > 0)) return;   // a zero-length step would turn the aim velocity into NaN
+      if (weapon.px === null) { weapon.px = reticle.x; weapon.py = reticle.y; weapon.lastX = reticle.x; }
       // A little weight: the rifle trails the aim by a few frames, then settles
       // exactly on it, and leans slightly against fast sideways aim movement
       const follow = 1 - Math.exp(-dt * 16);
-      weapon.px += (px - weapon.px) * follow;
-      weapon.py += (py - weapon.py) * follow;
-      weapon.ang += (ang - weapon.ang) * follow;
+      weapon.px += (reticle.x - weapon.px) * follow;
+      weapon.py += (reticle.y - weapon.py) * follow;
       const vx = (reticle.x - weapon.lastX) / dt;
       weapon.lastX = reticle.x;
-      weapon.tilt += (clamp(-vx * 0.00003, -0.05, 0.05) - weapon.tilt) * (1 - Math.exp(-dt * 8));
+      weapon.tilt += (clamp(-vx * 0.00005, -0.07, 0.07) - weapon.tilt) * (1 - Math.exp(-dt * 8));
 
-      // Recoil springs: a short kick back along the barrel and a small muzzle
+      // Recoil springs: a short kick back along the bore and a small muzzle
       // climb, both settled in ~0.15 s so the rifle is back on target
       const KS = 650, DS = 2 * Math.sqrt(KS) * 0.85, h = dt / 4;
       for (let i = 0; i < 4; i++) {
@@ -2987,46 +2945,34 @@
 
     function renderWeapon() {
       if (!gameStarted || weapon.px === null) return;
-      if (!camoPattern) buildGlovePatterns();
-      const k = weapon.k;
-      // Idle: slow breathing drift of a few pixels (no random shake)
-      const bx = Math.sin(time * 0.9) * H * 0.0022;
-      const by = Math.sin(time * 1.8 + 0.6) * H * 0.003;
-
+      if (!vmParts) vmParts = buildViewmodel();
+      const F = weaponFrame();
       const c = vctx;
       c.setTransform(1, 0, 0, 1, 0, 0);
       c.globalCompositeOperation = 'source-over';
       c.clearRect(0, 0, W, H);
-      c.save();
-      c.translate(weapon.px + bx, weapon.py + by);
-      c.rotate(weapon.ang + weapon.climb + weapon.tilt);
-      c.scale(k, -k);              // rifle's top faces up-right on screen
-      c.translate(-weapon.kick, 0);
-      const m = c.getTransform();
+      c.lineJoin = 'round';
+      c.lineWidth = 0.75;
+      for (const part of vmParts) drawVmPart(part, F);
 
-      drawStock();
-      drawForearm(-46, 68, -0.8, 0.6, 150, 17, 30);     // right arm, toward the bottom-right
-      drawLower();
-      drawUpper();
-      drawHandguard();
-      drawTopRailAndSights();
-      drawRightHand();
-      drawForearm(LEFT_HAND_X - 10, 34, -0.42, 0.91, 170, 18, 36);   // left (support) arm, from below
-      drawLeftHand();
-      c.restore();
-
-      const mp = vp(MUZZLE_X + 1, -0.5), pp = vp(2, -7);
-      weapon.muzzle = m.transformPoint({ x: mp[0], y: mp[1] });
-      weapon.port = m.transformPoint({ x: pp[0], y: pp[1] });
-      const ex = (m.a || 0) * -0.4 + (m.c || 0) * -1, ey = (m.b || 0) * -0.4 + (m.d || 0) * -1, el = Math.hypot(ex, ey) || 1;
-      weapon.eject = { x: ex / el, y: ey / el };
+      // Screen points the rest of the game uses: tracers start at the muzzle,
+      // brass leaves the ejection port up and to the right
+      weapon.muzzle = (([x, y]) => ({ x, y }))(F.proj(F.toCam([0, 0, MUZZLE_Z])));
+      const port = F.toCam([2.4, -1.4, 9]);
+      if (port[2] > NEAR_Z) {
+        const [px, py] = F.proj(port), [ox, oy] = F.proj(F.toCam([7, -4.5, 8]));
+        const el = Math.hypot(ox - px, oy - py) || 1;
+        weapon.port = { x: px, y: py };
+        weapon.eject = { x: (ox - px) / el, y: (oy - py) / el };
+        weapon.k = Math.min(5, (F.f / port[2]) * 0.12);   // brass is ~1 cm across at the port
+      }
 
       // Light the viewmodel like the scene: cool night falloff toward the bottom
       // of the screen, warm muzzle flash, blue-white lightning
       c.globalCompositeOperation = 'source-atop';
       const shadeG = c.createLinearGradient(0, H * 0.45, 0, H);
       shadeG.addColorStop(0, 'rgba(6,9,16,0.05)');
-      shadeG.addColorStop(1, 'rgba(6,9,16,0.5)');
+      shadeG.addColorStop(1, 'rgba(6,9,16,0.3)');
       c.fillStyle = shadeG; c.fillRect(0, 0, W, H);
       if (weapon.flash > 0) {
         const g = c.createRadialGradient(weapon.muzzle.x, weapon.muzzle.y, 0, weapon.muzzle.x, weapon.muzzle.y, H * 0.6);
@@ -3039,22 +2985,12 @@
       c.globalCompositeOperation = 'source-over';
       ctx.drawImage(vmCanvas, 0, 0);
 
-      // Emissive bits, in the rifle's frame on the main canvas
-      ctx.save();
-      ctx.transform(m.a, m.b, m.c, m.d, m.e, m.f);
-      ctx.globalCompositeOperation = 'lighter';
-      if (flashlightEnabled) {
-        const [lx, ly] = vp(154, 9), r = 9 * vScale(154);
-        const g = ctx.createRadialGradient(lx, ly, 0, lx, ly, r);
-        g.addColorStop(0, 'rgba(255,245,215,0.65)');
-        g.addColorStop(1, 'rgba(255,230,180,0)');
-        ctx.fillStyle = g; ctx.fillRect(lx - r, ly - r, r * 2, r * 2);
+      if (weapon.flash > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        drawMuzzleFlash(F);
+        ctx.restore();
       }
-      const [ledX, ledY] = vp(128.5, -27.5), lr = 4 * vScale(128);
-      ctx.fillStyle = `rgba(255,110,30,${0.55 + 0.25 * Math.sin(time * 3)})`;
-      ctx.beginPath(); ctx.arc(ledX, ledY, lr, 0, Math.PI * 2); ctx.fill();
-      if (weapon.flash > 0) drawMuzzleFlash();
-      ctx.restore();
     }
 
     // Spent brass, drawn over the viewmodel since it flies toward the camera
