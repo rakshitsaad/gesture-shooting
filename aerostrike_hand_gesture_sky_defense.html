@@ -492,6 +492,29 @@
         noise.start(now);
       }
 
+      // Roar of the airstrike comets falling: noise swept from a high hiss
+      // down to a low rumble just before they land
+      playCometWhoosh() {
+        if (this.muted || !this.ctx) return;
+        const now = this.ctx.currentTime, dur = 1.1;
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = this.noiseBuffer(dur, 0);
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.Q.value = 1.2;
+        filter.frequency.setValueAtTime(3200, now);
+        filter.frequency.exponentialRampToValueAtTime(350, now + dur);
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.35, now + 0.6);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.master);
+        noise.start(now);
+        noise.stop(now + dur);
+      }
+
       playThunder() {
         if (this.muted || !this.ctx) return;
         const now = this.ctx.currentTime;
@@ -561,8 +584,8 @@
     const SPAWN_Z_MIN = 30;
     const SPAWN_Z_MAX = 36;
     // Walking speeds in metres per second. The road is ~30 m long, so a
-    // shambler takes ~12 s and a crawler ~10 s to reach the barricade.
-    const BASE_SPEED = { shambler: 2.5, crawler: 2.9, tank: 1.5 };
+    // shambler takes ~10 s and a crawler ~8 s to reach the barricade.
+    const BASE_SPEED = { shambler: 3.1, crawler: 3.6, tank: 1.9 };
     const WAVE_SPEEDUP_PER_WAVE = 0.03;   // +3% per wave...
     const WAVE_SPEEDUP_MAX = 0.3;         // ...capped at +30%
     const APPROACH_SLOW_DIST = 4;         // metres before the barricade where zombies slow down
@@ -604,7 +627,7 @@
     let time = 0;          // wall-clock seconds (ambient animation)
     let gameTime = 0;      // seconds of active play
     let lastSpawnTime = 0;
-    let spawnDelay = 2.8;
+    let spawnDelay = 2.5;
     let trauma = 0;        // screen shake amount 0..1
     let shakeX = 0, shakeY = 0;
     let splashAcc = 0;
@@ -639,6 +662,7 @@
     let hitMarkers = [];
     let explosions = [];
     let pendingBlasts = [];
+    let comets = [];        // airstrike comets on their way down (see cometPath)
     let barricadeSmears = [];
 
     // Offscreen layers
@@ -1590,10 +1614,20 @@
       crawler: { hip: 0.3, shoulder: 0.44, headY: 0.5, headR: 0.12, shW: 0.27, hipW: 0.2, limb: 0.1 },
       tank: { hip: 1.15, shoulder: 1.95, headY: 2.12, headR: 0.15, shW: 0.52, hipW: 0.27, limb: 0.24 }
     };
-    const SKIN_TONES = ['#7d8a6a', '#8a8f7a', '#6f7f74', '#9a9479', '#7a7f8c'];
-    const SHIRTS = ['#5b6b7a', '#7a3b32', '#4f5a3c', '#8a8270', '#3c4250', '#6b4a5e', '#7d7b74'];
-    const PANTS = ['#2d3a4f', '#3b3a33', '#4a4136', '#22252b', '#3a4a5a'];
+    // Zombie looks. Shamblers come in four builds: a normal one in a torn
+    // button shirt, a runner in a dark jacket and cap, a fast one in a red
+    // tee with long hair and bare feet, and a thin, long-armed distorted one.
+    // bodyK / armK only change how wide and long-armed they're drawn.
+    const LOOKS = {
+      normal: { skin: ['#8e9a80', '#9aa08a', '#87927f'], shirt: ['#b9a888', '#a89a7c', '#c2b393'], pants: ['#2b2e36', '#33343a'], hair: 'short', style: 'shirt', barefoot: false, bodyK: 1, armK: 1 },
+      runner: { skin: ['#8e9a80', '#a3a28c'], shirt: ['#2d2f35', '#36312e'], pants: ['#2f343d', '#2a2c31'], hair: 'cap', style: 'jacket', barefoot: false, bodyK: 1, armK: 1 },
+      fast: { skin: ['#9aa08a', '#a3a28c'], shirt: ['#8f2024', '#7d1c22'], pants: ['#2a2a2e', '#302a2c'], hair: 'long', style: 'tee', barefoot: true, bodyK: 0.88, armK: 1.05 },
+      distorted: { skin: ['#8f8c96', '#8b958b'], shirt: ['#5f5869', '#55505e'], pants: ['#363b4c', '#2f3342'], hair: 'bald', style: 'rag', barefoot: false, bodyK: 0.86, armK: 1.18 },
+      crawler: { skin: ['#a3a28c', '#9aa08a'], shirt: ['#b0a184', '#8f8a7e'], pants: ['#2b2e36'], hair: 'long', style: 'shirt', barefoot: true, bodyK: 1, armK: 1 },
+      tank: { skin: ['#7f9168', '#86946f'], shirt: ['#2b2c31'], pants: ['#2b2c31', '#33302d'], hair: 'bald', style: 'tanktop', barefoot: true, bodyK: 1, armK: 1 }
+    };
     const HAIR = ['#1a1714', '#2b2118', '#3d3a36', '#141414'];
+    const CAPS = ['#283247', '#2b2b30', '#3a2a2a'];
 
     class Zombie {
       constructor(type, waveNum) {
@@ -1619,20 +1653,27 @@
         this.eyes = null;
         this.stumpPos = null;
 
-        if (type === 'tank') this.skin = hexToRgb('#8c5a5a');
-        else if (type === 'crawler') this.skin = hexToRgb(pick(['#a39a6e', '#9aa088', '#8f9a8a']));
-        else this.skin = hexToRgb(pick(SKIN_TONES));
-        this.shirt = hexToRgb(pick(SHIRTS));
-        this.pants = hexToRgb(pick(PANTS));
+        const rv = Math.random();
+        this.look = type !== 'shambler' ? type : rv < 0.4 ? 'normal' : rv < 0.65 ? 'runner' : rv < 0.85 ? 'fast' : 'distorted';
+        const L = LOOKS[this.look];
+        this.skin = hexToRgb(pick(L.skin));
+        this.shirt = hexToRgb(pick(L.shirt));
+        this.pants = hexToRgb(pick(L.pants));
         this.hairCol = hexToRgb(pick(HAIR));
-        this.hair = type === 'crawler' || (type === 'shambler' && Math.random() < 0.6);
+        this.capCol = hexToRgb(pick(CAPS));
+        this.hairStyle = L.hair;
+        this.hair = L.hair !== 'bald';
+        this.shirtStyle = L.style;
+        this.barefoot = L.barefoot;
+        this.bodyK = L.bodyK;
+        this.armK = L.armK;
         this.tornLeg = Math.random() < 0.35 ? (Math.random() < 0.5 ? -1 : 1) : 0;
-        this.eyeColor = type === 'tank' ? [255, 50, 30] : type === 'crawler' ? [170, 255, 80] : [255, 205, 60];
+        this.eyeColor = [255, 228, 150];   // all of them: pale, glowing yellow
         this.stains = Array.from({ length: 3 }, () => ({ x: rand(-0.15, 0.15), y: rand(1.0, 1.4), r: rand(0.03, 0.08) }));
         this.pustules = Array.from({ length: 5 }, () => ({ x: rand(-0.4, 0.4), y: rand(0.08, 0.6), r: rand(0.03, 0.055) }));
         // Close-up details (drawn only when the zombie is near, see lod)
         this.patches = Array.from({ length: 2 }, () => ({ a: rand(0, Math.PI * 2), d: rand(0.3, 0.6), r: rand(0.18, 0.3) }));
-        this.skullPatch = type !== 'tank' && !this.hair && Math.random() < 0.5;
+        this.skullPatch = type !== 'tank' && !this.hair && Math.random() < 0.6;
         this.kneeTear = Math.random() < 0.5 ? (Math.random() < 0.5 ? -1 : 1) : 0;
         this.lod = 1;
       }
@@ -1736,7 +1777,8 @@
     const KILLS_PER_WAVE = 16;
     const MAX_ACTIVE_ZOMBIES = 22;
     const groupSizeFor = (w) => 3 + Math.min(Math.floor((w - 1) / 2), 3);   // 3..6
-    const spawnDelayFor = (w) => Math.max(1.6, 3.0 - (w - 1) * 0.12);        // seconds
+    const SPAWN_RATE = 1.2;   // groups arrive 20% more often than the base pacing
+    const spawnDelayFor = (w) => Math.max(1.6, 3.0 - (w - 1) * 0.12) / SPAWN_RATE;   // seconds
 
     // Spread a group across the street and in depth so nobody stacks up or
     // pops in right at the barricade
@@ -1881,9 +1923,60 @@
       const targets = alive.slice(0, 3).map(z => ({ x: z.worldX(), z: Math.max(z.z, 7) }));
       const defaults = [{ x: -1.5, z: 9 }, { x: 1.8, z: 15 }, { x: 0, z: 22 }];
       while (targets.length < 3) targets.push(defaults[targets.length]);
-      targets.forEach((t, i) => pendingBlasts.push({ x: t.x, z: t.z, at: gameTime + i * 0.16, damage: i === 0 }));
+      // Each bomb is a comet streaking down from the sky; it blasts on impact
+      targets.forEach((t, i) => {
+        const at = gameTime + COMET_FALL + i * 0.22;
+        pendingBlasts.push({ x: t.x, z: t.z, at, damage: i === 0 });
+        comets.push({ x: t.x, z: t.z, start: at - COMET_FALL, at, side: i % 2 ? -1 : 1, ox: rand(0.22, 0.42), trailAcc: 0 });
+      });
+      audio.playCometWhoosh();
 
       createFloatingText(W / 2, H * 0.36, "AIRSTRIKE INBOUND!", "#f59e0b", 22);
+    }
+
+    // Airstrike comets: each enters above the top of the screen, off to one
+    // side, and falls (accelerating) onto its impact point on the road.
+    // Everything is computed in screen space from the time, so no per-comet
+    // physics is needed.
+    const COMET_FALL = 0.75;   // seconds from the sky to impact
+    function cometPath(c) {
+      const g = project(c.x, 0.3, c.z);
+      const sx = g.x + c.side * W * c.ox, sy = -H * 0.08;
+      const t = clamp((gameTime - c.start) / (c.at - c.start), 0, 1);
+      const e = 0.35 * t + 0.65 * t * t;   // speeding up, but on screen from the start
+      return { hx: lerp(sx, g.x, e), hy: lerp(sy, g.y, e), sx, sy, t, s: g.s };
+    }
+
+    function updateComets(dt) {
+      for (let i = comets.length - 1; i >= 0; i--) {
+        const c = comets[i];
+        if (gameTime >= c.at) { comets.splice(i, 1); continue; }
+        if (gameTime < c.start) continue;
+        // Shed glowing embers behind the head as it falls
+        const p = cometPath(c), k = clamp(p.s / 60, 0.3, 2);
+        c.trailAcc += dt * 40;
+        for (; c.trailAcc >= 1; c.trailAcc--) {
+          addParticle({ type: 'ember', x: p.hx + rand(-4, 4), y: p.hy + rand(-4, 4), vx: rand(-40, 40), vy: rand(-60, 10), g: 30, size: rand(1.5, 3) * k, life: rand(0.3, 0.6) });
+        }
+      }
+    }
+
+    // Drawn additively (in renderEmissive): a fiery tail narrowing back along
+    // the fall line, and a white-hot head. Three strips and three sprites each.
+    function renderComets() {
+      for (const c of comets) {
+        const p = cometPath(c);
+        if (p.t <= 0) continue;
+        const dx = p.sx - p.hx, dy = p.sy - p.hy, d = Math.hypot(dx, dy) || 1;
+        const L = Math.min(d, H * 0.42), tx = p.hx + (dx / d) * L, ty = p.hy + (dy / d) * L;
+        const hr = clamp(p.s * 0.35, 10, H * 0.06) * (0.6 + 0.4 * p.t);
+        ctx.fillStyle = 'rgba(255,110,30,0.22)'; beamStrip(p.hx, p.hy, tx, ty, hr * 2.4, 2);
+        ctx.fillStyle = 'rgba(255,170,70,0.5)'; beamStrip(p.hx, p.hy, tx, ty, hr * 1.2, 1);
+        ctx.fillStyle = 'rgba(255,240,200,0.9)'; beamStrip(p.hx, p.hy, lerp(p.hx, tx, 0.55), lerp(p.hy, ty, 0.55), hr * 0.5, 0.5);
+        drawSprite(SPR.fireR, p.hx, p.hy, hr * 3.2, 0.7);
+        drawSprite(SPR.fireY, p.hx, p.hy, hr * 1.6, 0.95);
+        drawSprite(SPR.warm, p.hx, p.hy, hr * 0.8, 1);
+      }
     }
 
     function applyAirstrikeDamage() {
@@ -2111,27 +2204,87 @@
       ctx.restore();
     }
 
+    // Hair over the skull: 'short' messy crop, 'long' (past the jaw), 'cap'
+    // (a baseball cap) or 'bald'
+    function drawHair(z, C, R) {
+      const st = z.hairStyle;
+      if (st === 'bald') return;
+      if (st === 'cap') {
+        // Dome, brim pulled down to one side, a pale logo, hair poking out
+        ctx.fillStyle = C(z.capCol);
+        ctx.beginPath(); ctx.ellipse(0, -R * 0.36, R * 0.98, R * 0.8, 0, Math.PI, Math.PI * 2); ctx.fill();
+        ctx.fillRect(-R * 0.98, -R * 0.38, R * 1.96, R * 0.12);
+        ctx.fillStyle = C(z.capCol, -0.4);
+        ctx.beginPath(); ctx.ellipse(R * 0.42, -R * 0.27, R * 0.82, R * 0.17, 0.12, 0, Math.PI * 2); ctx.fill();
+        if (z.lod > 0) {
+          ctx.fillStyle = C(z.hairCol);
+          dot(-R * 0.86, -R * 0.14, R * 0.16, R * 0.24);
+          dot(R * 0.86, -R * 0.14, R * 0.16, R * 0.24);
+        }
+        if (z.lod > 1) { ctx.fillStyle = C([205, 205, 195]); dot(-R * 0.12, -R * 0.74, R * 0.14, R * 0.1); }
+        return;
+      }
+      ctx.fillStyle = C(z.hairCol);
+      ctx.beginPath(); ctx.ellipse(0, -R * 0.32, R * 0.95, R * 0.78, 0, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
+      if (z.lod === 0) return;
+      if (st === 'long') {
+        // Matted curtains of hair hanging past the jaw on both sides
+        for (const s of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(s * R * 0.96, -R * 0.35);
+          ctx.quadraticCurveTo(s * R * 1.18, R * 0.5, s * R * 0.98, R * 1.35);
+          ctx.lineTo(s * R * 0.62, R * 1.1);
+          ctx.quadraticCurveTo(s * R * 0.74, R * 0.2, s * R * 0.55, -R * 0.52);
+          ctx.closePath(); ctx.fill();
+        }
+      } else {
+        // Messy short crop: spiky tufts along the crown
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = Math.PI * (1.1 + i * 0.16), x = Math.cos(a) * R * 0.88, y = Math.sin(a) * R * 0.92 - R * 0.05;
+          ctx.moveTo(x - R * 0.15, y + R * 0.12);
+          ctx.lineTo(x + Math.cos(a) * R * 0.24, y + Math.sin(a) * R * 0.24 - R * 0.04);
+          ctx.lineTo(x + R * 0.15, y + R * 0.12);
+        }
+        ctx.fill();
+      }
+    }
+
     function drawZombieHead(z, C, hx, hy, R, OUT) {
       const ph = z.walkCycle;
       ctx.save();
       ctx.translate(hx, hy);
       ctx.rotate(z.headTilt + Math.sin(ph * 0.5) * 0.07);
 
+      // Ears, then a gaunt skull narrowing to a bony jaw
+      if (z.lod > 0 && z.hairStyle !== 'long') {
+        ctx.fillStyle = C(z.skin, -0.22);
+        dot(-R * 0.9, R * 0.05, R * 0.15, R * 0.24);
+        dot(R * 0.9, R * 0.05, R * 0.15, R * 0.24);
+      }
       if (z.lod > 0) {
-        const hg = ctx.createRadialGradient(-R * 0.35, -R * 0.4, R * 0.1, 0, 0, R * 1.2);
-        hg.addColorStop(0, C(z.skin, 0.18));
-        hg.addColorStop(1, C(z.skin, -0.42));
+        const hg = ctx.createRadialGradient(-R * 0.35, -R * 0.45, R * 0.1, 0, 0, R * 1.25);
+        hg.addColorStop(0, C(z.skin, 0.2));
+        hg.addColorStop(1, C(z.skin, -0.45));
         ctx.fillStyle = hg;
       } else {
         ctx.fillStyle = C(z.skin, -0.1);   // a few pixels wide: flat shade is enough
       }
-      ctx.beginPath(); ctx.ellipse(0, 0, R * 0.9, R * 1.08, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, -R * 1.08);
+      ctx.bezierCurveTo(R * 1.0, -R * 1.08, R * 0.98, R * 0.2, R * 0.6, R * 0.84);
+      ctx.quadraticCurveTo(0, R * 1.22, -R * 0.6, R * 0.84);
+      ctx.bezierCurveTo(-R * 0.98, R * 0.2, -R * 1.0, -R * 1.08, 0, -R * 1.08);
+      ctx.closePath(); ctx.fill();
       ctx.lineWidth = 0.02; ctx.strokeStyle = OUT; ctx.stroke();
 
       if (z.lod > 1) {
-        // Rotting patches, a bare patch of skull, and moonlight on the crown
+        // Rot patches, hollow cheeks, a bare patch of skull, moonlight on the crown
         ctx.fillStyle = C(z.skin, -0.32, 0.8);
         for (const p of z.patches) dot(Math.cos(p.a) * p.d * R, Math.sin(p.a) * p.d * R * 0.8, p.r * R, p.r * R * 0.75);
+        ctx.fillStyle = C(z.skin, -0.5, 0.55);
+        dot(-R * 0.5, R * 0.38, R * 0.17, R * 0.27, 0.2);
+        dot(R * 0.5, R * 0.38, R * 0.17, R * 0.27, -0.2);
         if (z.skullPatch) {
           ctx.fillStyle = C([196, 186, 160]);
           dot(R * 0.32, -R * 0.62, R * 0.34, R * 0.24, 0.4);
@@ -2139,57 +2292,48 @@
           ctx.beginPath(); ctx.moveTo(R * 0.12, -R * 0.72); ctx.lineTo(R * 0.34, -R * 0.6); ctx.lineTo(R * 0.3, -R * 0.46); ctx.stroke();
         }
         ctx.strokeStyle = C(RIM_RGB, 0, 0.55); ctx.lineWidth = R * 0.1;
-        ctx.beginPath(); ctx.ellipse(0, 0, R * 0.84, R * 1.02, 0, Math.PI * 1.05, Math.PI * 1.55); ctx.stroke();
+        ctx.beginPath(); ctx.ellipse(0, -R * 0.05, R * 0.86, R * 1.0, 0, Math.PI * 1.05, Math.PI * 1.55); ctx.stroke();
       }
 
-      if (z.hair) {
-        ctx.fillStyle = C(z.hairCol);
-        ctx.beginPath(); ctx.ellipse(0, -R * 0.3, R * 0.93, R * 0.8, 0, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
-        if (z.lod > 0) {
-          ctx.strokeStyle = C(z.hairCol); ctx.lineWidth = 0.014;
-          const long = z.type === 'crawler' ? 1.6 : 0.6;
-          for (let i = 0; i < 6; i++) {
-            const a = Math.PI * (1.08 + i * 0.165);
-            ctx.beginPath();
-            ctx.moveTo(Math.cos(a) * R * 0.85, Math.sin(a) * R * 0.9);
-            ctx.lineTo(Math.cos(a) * R * 1.05, Math.sin(a) * R * 0.6 + R * long);
-            ctx.stroke();
-          }
-        }
-      }
+      drawHair(z, C, R);
 
-      // Sunken eye sockets
+      // Deep eye sockets (the glow itself is drawn later, see renderZombieGlow)
       const ex = R * 0.38, ey = -R * 0.05;
       ctx.fillStyle = C([18, 8, 8]);
-      dot(-ex, ey, R * 0.25, R * 0.18, 0.15);
-      dot(ex, ey, R * 0.25, R * 0.18, -0.15);
+      dot(-ex, ey, R * 0.27, R * 0.2, 0.15);
+      dot(ex, ey, R * 0.27, R * 0.2, -0.15);
       if (z.lod > 1) {
         // Heavy brow ridge and a rotted-away nose
-        ctx.strokeStyle = C(z.skin, -0.6, 0.9); ctx.lineWidth = R * 0.1;
-        ctx.beginPath(); ctx.moveTo(-ex - R * 0.28, ey - R * 0.2); ctx.quadraticCurveTo(0, ey - R * 0.36, ex + R * 0.28, ey - R * 0.2); ctx.stroke();
+        ctx.strokeStyle = C(z.skin, -0.6, 0.9); ctx.lineWidth = R * 0.11;
+        ctx.beginPath(); ctx.moveTo(-ex - R * 0.3, ey - R * 0.2); ctx.quadraticCurveTo(0, ey - R * 0.38, ex + R * 0.3, ey - R * 0.2); ctx.stroke();
         dot(-R * 0.07, R * 0.25, R * 0.05, R * 0.075);
         dot(R * 0.07, R * 0.25, R * 0.05, R * 0.075);
       }
       const m = ctx.getTransform();
       z.eyes = [m.transformPoint({ x: -ex, y: ey }), m.transformPoint({ x: ex, y: ey })];
-      z.eyeR = Math.hypot(m.a, m.b) * R * 0.13;
+      z.eyeR = Math.hypot(m.a, m.b) * R * 0.14;
 
-      // Gaping mouth
-      const jaw = R * (0.2 + Math.abs(Math.sin(ph * 0.6)) * 0.3);
-      ctx.fillStyle = C([26, 4, 4]);
-      dot(0, R * 0.55, R * 0.38, jaw);
+      // Wide, snarling mouth with teeth top and bottom
+      const jaw = R * (0.24 + Math.abs(Math.sin(ph * 0.6)) * 0.3);
+      ctx.fillStyle = C([30, 4, 6]);
+      dot(0, R * 0.58, R * 0.42, jaw);
       if (Math.hypot(m.a, m.b) * R > 12) {
-        ctx.fillStyle = C([190, 180, 140]);
-        for (let i = -2; i <= 2; i++) ctx.fillRect(i * R * 0.13 - R * 0.04, R * 0.55 - jaw * 0.9, R * 0.08, R * 0.1);
+        ctx.fillStyle = C([200, 188, 150]);
+        for (let i = -2; i <= 2; i++) ctx.fillRect(i * R * 0.14 - R * 0.045, R * 0.58 - jaw * 0.92, R * 0.09, R * 0.11);
+        for (let i = -1; i <= 1; i++) ctx.fillRect(i * R * 0.15 - R * 0.045, R * 0.58 + jaw * 0.82 - R * 0.1, R * 0.09, R * 0.1);
         ctx.strokeStyle = C(z.skin, -0.55); ctx.lineWidth = 0.008;
         ctx.beginPath();
         ctx.moveTo(-R * 0.7, -R * 0.4); ctx.lineTo(-R * 0.5, -R * 0.2); ctx.lineTo(-R * 0.6, R * 0.1);
         ctx.moveTo(R * 0.6, R * 0.2); ctx.lineTo(R * 0.4, R * 0.35);
         ctx.stroke();
       }
-      // Blood drool
+      // Blood drool, and dried blood down the chin
       ctx.strokeStyle = C([115, 10, 10]); ctx.lineWidth = R * 0.12;
-      ctx.beginPath(); ctx.moveTo(R * 0.15, R * 0.65); ctx.lineTo(R * 0.18, R * 1.05 + Math.sin(ph) * R * 0.08); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(R * 0.15, R * 0.68); ctx.lineTo(R * 0.18, R * 1.1 + Math.sin(ph) * R * 0.08); ctx.stroke();
+      if (z.lod > 0) {
+        ctx.strokeStyle = C([95, 8, 8], 0, 0.8); ctx.lineWidth = R * 0.09;
+        ctx.beginPath(); ctx.moveTo(-R * 0.3, R * 0.75); ctx.lineTo(-R * 0.26, R * 1.02); ctx.stroke();
+      }
       ctx.restore();
     }
 
@@ -2202,18 +2346,67 @@
       z.stumpPos = m.transformPoint({ x: 0, y });
     }
 
+    // Clawed hand: palm and four long, hooked fingers (k scales it; down
+    // points the fingers at the road, for crawlers' planted hands)
+    function drawClaw(z, C, hand, side, k = 1, down = false) {
+      ctx.fillStyle = C(z.skin, 0.05);
+      dot(hand[0], hand[1], 0.055 * k, 0.05 * k);
+      if (z.lod === 0) return;
+      const dy = down ? 1 : -1;
+      ctx.strokeStyle = C(z.skin, -0.28); ctx.lineWidth = 0.017 * k;
+      const tips = [];
+      for (let f = 0; f < 4; f++) {
+        const t = f - 1.5;
+        const bx = hand[0] + t * 0.024 * k, by = hand[1] + dy * 0.025 * k;
+        const tx = hand[0] + (t * 0.036 + side * 0.012) * k, ty = hand[1] + dy * (0.115 - Math.abs(t) * 0.012) * k;
+        ctx.beginPath(); ctx.moveTo(bx, by); ctx.quadraticCurveTo(bx + t * 0.01 * k, ty - dy * 0.03 * k, tx + side * 0.012 * k, ty); ctx.stroke();
+        tips.push([tx + side * 0.012 * k, ty]);
+      }
+      if (z.lod > 1) {
+        ctx.fillStyle = C([30, 26, 22]);
+        for (const [tx, ty] of tips) dot(tx, ty, 0.011 * k, 0.015 * k);
+      }
+    }
+
+    // Scuffed work boot, or a bare foot with toes
+    function drawFoot(z, C, foot, side, k = 1) {
+      if (z.barefoot) {
+        ctx.fillStyle = C(z.skin, -0.2);
+        dot(foot[0] + side * 0.01 * k, foot[1] + 0.015 * k, 0.075 * k, 0.042 * k);
+        if (z.lod > 1) {
+          ctx.fillStyle = C(z.skin, -0.45);
+          for (let t = -1; t <= 1; t++) dot(foot[0] + (side * 0.01 + t * 0.03) * k, foot[1] + 0.045 * k, 0.014 * k, 0.012 * k);
+        }
+      } else {
+        ctx.fillStyle = C([46, 34, 26]);
+        dot(foot[0] + side * 0.012 * k, foot[1] + 0.02 * k, 0.095 * k, 0.058 * k);
+        if (z.lod > 1) {
+          ctx.fillStyle = C([20, 16, 14]);
+          ctx.fillRect(foot[0] + (side * 0.012 - 0.09) * k, foot[1] + 0.055 * k, 0.18 * k, 0.025 * k);
+        }
+      }
+    }
+
+    // Blood smeared along a forearm (close-up zombies)
+    function bloodSmear(z, C, a, b, w) {
+      if (z.lod === 0) return;
+      ctx.strokeStyle = C([96, 10, 10], 0, 0.75); ctx.lineWidth = w;
+      ctx.beginPath(); ctx.moveTo(lerp(a[0], b[0], 0.35), lerp(a[1], b[1], 0.35)); ctx.lineTo(lerp(a[0], b[0], 0.9), lerp(a[1], b[1], 0.9)); ctx.stroke();
+    }
+
     function drawShambler(z, C, P) {
       const r = RIGS.shambler, ph = z.walkCycle, bob = P.bob;
       const OUT = C([8, 8, 10]);
       const hi = (rgb) => (z.lod > 1 ? C(rgb, 0.3, 0.5) : null);
       const hipY = -(r.hip + bob), shY = -(r.shoulder + bob);
+      const shW = r.shW * z.bodyK, hipW = r.hipW * z.bodyK;
 
-      // Legs (knee lifts toward the camera on each step)
+      // Legs in torn trousers (knee lifts toward the camera on each step)
       for (const side of [-1, 1]) {
         const lift = Math.max(0, Math.sin(ph) * side) * 0.16;
-        const hip = [side * r.hipW * 0.65, hipY + 0.04];
-        const knee = [side * (r.hipW + 0.04), -(0.5 + lift)];
-        const foot = [side * (r.hipW + 0.03), -(0.06 + lift * 0.5)];
+        const hip = [side * hipW * 0.65, hipY + 0.04];
+        const knee = [side * (hipW + 0.04), -(0.5 + lift)];
+        const foot = [side * (hipW + 0.03), -(0.06 + lift * 0.5)];
         if (z.tornLeg === side) {
           limb([hip, knee], r.limb * 1.2, C(z.pants), OUT, hi(z.pants));
           limb([knee, foot], r.limb * 0.72, C(z.skin, -0.18), OUT, hi(z.skin));
@@ -2222,34 +2415,35 @@
         } else {
           limb([hip, knee, foot], r.limb * 1.2, C(z.pants), OUT, hi(z.pants));
           if (z.lod > 1 && z.kneeTear === side) {
-            // Ripped knee showing grey skin
             ctx.fillStyle = C(z.skin, -0.15);
             dot(knee[0], knee[1], r.limb * 0.42, r.limb * 0.32);
           }
         }
-        ctx.fillStyle = C([28, 24, 22]);
-        dot(foot[0] + side * 0.01, foot[1] + 0.02, 0.085, 0.05);
+        drawFoot(z, C, foot, side);
       }
 
       // Pelvis, and a belt on close-up zombies
       ctx.fillStyle = C(z.pants, -0.1);
-      ctx.fillRect(-r.hipW - 0.04, hipY - 0.05, (r.hipW + 0.04) * 2, 0.16);
+      ctx.fillRect(-hipW - 0.04, hipY - 0.05, (hipW + 0.04) * 2, 0.16);
       if (z.lod > 1) {
         ctx.fillStyle = C([30, 24, 20]);
-        ctx.fillRect(-r.hipW - 0.045, hipY - 0.06, (r.hipW + 0.045) * 2, 0.04);
+        ctx.fillRect(-hipW - 0.045, hipY - 0.06, (hipW + 0.045) * 2, 0.04);
       }
+
+      // Runners wear a hood bunched behind the neck
+      if (z.shirtStyle === 'jacket') { ctx.fillStyle = C(z.shirt, -0.3); dot(0, shY - 0.02, 0.14, 0.06); }
 
       // Torso with a ragged hem
       ctx.beginPath();
-      ctx.moveTo(-r.shW, shY + 0.05);
-      ctx.quadraticCurveTo(0, shY - 0.06, r.shW, shY + 0.05);
-      ctx.lineTo(r.hipW + 0.05, hipY + 0.02);
+      ctx.moveTo(-shW, shY + 0.05);
+      ctx.quadraticCurveTo(0, shY - 0.06, shW, shY + 0.05);
+      ctx.lineTo(hipW + 0.05, hipY + 0.02);
       for (let i = 0; i <= 7; i++) {
-        ctx.lineTo(lerp(r.hipW + 0.05, -r.hipW - 0.05, i / 7), hipY + 0.02 + (i % 2 ? 0.07 : 0));
+        ctx.lineTo(lerp(hipW + 0.05, -hipW - 0.05, i / 7), hipY + 0.02 + (i % 2 ? 0.07 : 0));
       }
       ctx.closePath();
       if (z.lod > 0) {
-        const tg = ctx.createLinearGradient(-r.shW, 0, r.shW, 0);
+        const tg = ctx.createLinearGradient(-shW, 0, shW, 0);
         tg.addColorStop(0, C(z.shirt, 0.15));
         tg.addColorStop(0.55, C(z.shirt));
         tg.addColorStop(1, C(z.shirt, -0.5));
@@ -2260,28 +2454,53 @@
       ctx.fill();
       ctx.lineWidth = 0.025; ctx.strokeStyle = OUT; ctx.stroke();
 
-      // Stains, rips and wounds are clipped to the shirt; far zombies skip them
+      // Clothing details, stains and wounds, clipped to the torso
       if (z.lod > 0) {
         ctx.save();
         ctx.clip();
-        for (const st of z.stains) {
-          ctx.fillStyle = C([92, 10, 10], 0, 0.75);
-          dot(st.x, -(st.y + bob), st.r, st.r * 1.4);
+        const st = z.shirtStyle;
+        if (st === 'jacket') {
+          // Open jacket: dark shirt underneath, a zip line down each edge
+          ctx.fillStyle = C([22, 22, 26]);
+          ctx.fillRect(-0.055, shY - 0.02, 0.11, r.shoulder - r.hip + 0.1);
+          ctx.strokeStyle = C(z.shirt, 0.35, 0.8); ctx.lineWidth = 0.01;
+          ctx.beginPath(); ctx.moveTo(-0.055, shY); ctx.lineTo(-0.055, hipY + 0.05); ctx.moveTo(0.055, shY); ctx.lineTo(0.055, hipY + 0.05); ctx.stroke();
+        } else {
+          // Open collar showing the chest, a button line on proper shirts
+          ctx.fillStyle = C(z.skin, -0.12);
+          ctx.beginPath(); ctx.moveTo(-0.075, shY - 0.03); ctx.lineTo(0, shY + (st === 'shirt' ? 0.16 : 0.11)); ctx.lineTo(0.075, shY - 0.03); ctx.closePath(); ctx.fill();
+          if (st === 'shirt') {
+            ctx.strokeStyle = C(z.shirt, -0.45); ctx.lineWidth = 0.009;
+            ctx.beginPath(); ctx.moveTo(0.008, shY + 0.16); ctx.lineTo(0.012, hipY + 0.04); ctx.stroke();
+            if (z.lod > 1) {
+              ctx.fillStyle = C([60, 50, 40]);
+              for (let i = 1; i <= 3; i++) dot(0.022, shY + 0.16 + i * 0.075, 0.009, 0.009);
+              // Collar flaps
+              ctx.fillStyle = C(z.shirt, 0.2);
+              for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(s * 0.075, shY - 0.03); ctx.lineTo(s * 0.13, shY + 0.02); ctx.lineTo(s * 0.03, shY + 0.07); ctx.closePath(); ctx.fill(); }
+            }
+          }
         }
-        // Rip lines in the shirt
+        for (const s of z.stains) {
+          ctx.fillStyle = C([92, 10, 10], 0, 0.75);
+          dot(s.x, -(s.y + bob), s.r, s.r * 1.4);
+        }
+        // Rip lines in the cloth
         ctx.strokeStyle = C(z.shirt, -0.6); ctx.lineWidth = 0.012;
         ctx.beginPath();
         ctx.moveTo(-0.1, shY + 0.15); ctx.lineTo(-0.04, shY + 0.28); ctx.lineTo(-0.08, shY + 0.38);
         ctx.stroke();
+        if (st === 'tee') {
+          // Torn-away patch at the side, showing grey skin
+          ctx.fillStyle = C(z.skin, -0.2); dot(-hipW + 0.01, hipY - 0.06, 0.07, 0.06);
+        }
         if (z.lod > 1) {
-          // Torn collar and blood that ran down from the mouth
-          ctx.fillStyle = C(z.shirt, -0.55);
-          ctx.beginPath(); ctx.moveTo(-0.08, shY - 0.02); ctx.lineTo(0, shY + 0.11); ctx.lineTo(0.08, shY - 0.02); ctx.closePath(); ctx.fill();
+          // Blood that ran down from the mouth
           ctx.strokeStyle = C([88, 8, 8], 0, 0.85); ctx.lineWidth = 0.035;
           ctx.beginPath(); ctx.moveTo(0.02, shY + 0.04); ctx.quadraticCurveTo(0.07, shY + 0.22, 0.01, shY + 0.44); ctx.stroke();
         }
-        // Exposed ribs once badly hurt
-        if (z.hp / z.maxHp < 0.5) {
+        // Exposed ribs once badly hurt (distorted zombies always show them)
+        if (st === 'rag' || z.hp / z.maxHp < 0.5) {
           ctx.fillStyle = C([70, 6, 6]);
           dot(0.08, shY + 0.22, 0.09, 0.07);
           ctx.strokeStyle = C([215, 200, 175]); ctx.lineWidth = 0.014;
@@ -2294,7 +2513,7 @@
       if (z.lod > 1) {
         // Moonlight along the left side of the body
         ctx.strokeStyle = C(RIM_RGB, 0, 0.5); ctx.lineWidth = 0.022;
-        ctx.beginPath(); ctx.moveTo(-r.shW + 0.025, shY + 0.07); ctx.lineTo(-r.hipW - 0.035, hipY - 0.01); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-shW + 0.025, shY + 0.07); ctx.lineTo(-hipW - 0.035, hipY - 0.01); ctx.stroke();
       }
 
       // Neck
@@ -2303,7 +2522,7 @@
 
       // Arms reaching toward the player
       for (const side of [-1, 1]) {
-        const sx = side * (r.shW - 0.03), sy = shY + 0.07;
+        const sx = side * (shW - 0.03), sy = shY + 0.07;
         if (z.lostArm === side) {
           ctx.fillStyle = C(z.shirt, -0.1);
           dot(sx, sy + 0.04, 0.07, 0.08);
@@ -2312,26 +2531,15 @@
           continue;
         }
         const swing = Math.sin(ph + (side > 0 ? Math.PI : 0)) * 0.07;
-        const elbow = [side * (r.shW + 0.12), sy + 0.16 + swing * 0.5];
-        const hand = [side * (r.shW - 0.02), sy + 0.04 + swing * 1.4];
+        const ak = z.armK;
+        const elbow = [sx + (side * (r.shW + 0.12) - sx) * ak, sy + (0.16 + swing * 0.5) * ak];
+        const hand = [sx + (side * (r.shW - 0.02) - sx) * ak, sy + (0.04 + swing * 1.4) * ak];
+        // Jackets have full sleeves; shirts are torn off at the elbow
+        const sleeve = z.shirtStyle === 'jacket';
         limb([[sx, sy], elbow], r.limb, C(z.shirt, -0.1), OUT, hi(z.shirt));
-        limb([elbow, hand], r.limb * 0.8, C(z.skin, -0.05), OUT, hi(z.skin));
-        ctx.fillStyle = C(z.skin, 0.05);
-        dot(hand[0], hand[1], 0.06, 0.055);
-        if (z.lod > 0) {
-          // Clawed fingers, with dark nails up close
-          ctx.strokeStyle = C(z.skin, -0.3); ctx.lineWidth = 0.018;
-          for (let f = -1; f <= 1; f++) {
-            ctx.beginPath();
-            ctx.moveTo(hand[0] + f * 0.03, hand[1] - 0.03);
-            ctx.lineTo(hand[0] + f * 0.04 + side * 0.01, hand[1] - 0.095);
-            ctx.stroke();
-          }
-          if (z.lod > 1) {
-            ctx.fillStyle = C([30, 26, 22]);
-            for (let f = -1; f <= 1; f++) dot(hand[0] + f * 0.04 + side * 0.01, hand[1] - 0.1, 0.012, 0.016);
-          }
-        }
+        limb([elbow, hand], r.limb * 0.8, sleeve ? C(z.shirt, -0.2) : C(z.skin, -0.05), OUT, hi(sleeve ? z.shirt : z.skin));
+        if (!sleeve) bloodSmear(z, C, elbow, hand, r.limb * 0.3);
+        drawClaw(z, C, hand, side);
       }
 
       if (!z.headDecapitated) drawZombieHead(z, C, 0, -(r.headY + bob), r.headR, OUT);
@@ -2344,16 +2552,20 @@
       const hi = (rgb) => (z.lod > 1 ? C(rgb, 0.3, 0.5) : null);
       const shY = -(r.shoulder + bob);
 
-      // Hind feet peeking out behind
+      // Bare feet peeking out behind
       for (const side of [-1, 1]) {
-        ctx.fillStyle = C(z.pants, -0.25);
+        ctx.fillStyle = C(z.skin, -0.3);
         dot(side * 0.22, -0.06 - Math.max(0, Math.sin(ph + side)) * 0.05, 0.07, 0.05);
       }
-      // Hunched back, with the spine pushing through up close
+      // Hunched back in a torn shirt, with the spine pushing through up close
       ctx.fillStyle = C(z.shirt, -0.3);
       dot(0, -(0.52 + bob), 0.24, 0.13);
       ctx.strokeStyle = C(z.shirt, -0.55); ctx.lineWidth = 0.015;
       ctx.beginPath(); ctx.moveTo(0, -(0.63 + bob)); ctx.lineTo(0, -(0.45 + bob)); ctx.stroke();
+      if (z.lod > 0) {
+        ctx.fillStyle = C(z.skin, -0.25); dot(0.1, -(0.5 + bob), 0.07, 0.05);
+        ctx.fillStyle = C([92, 10, 10], 0, 0.7); dot(-0.09, -(0.55 + bob), 0.05, 0.035);
+      }
       if (z.lod > 1) {
         ctx.fillStyle = C([200, 190, 165]);
         for (let i = 0; i < 4; i++) dot(0, -(0.62 - i * 0.045 + bob), 0.024, 0.016);
@@ -2367,14 +2579,8 @@
         const hand = [side * (r.shW + 0.08), -(0.03 + lift)];
         limb([sh, el], r.limb, C(z.skin, -0.05), OUT, hi(z.skin));
         limb([el, hand], r.limb * 0.85, C(z.skin, -0.12), OUT, hi(z.skin));
-        ctx.fillStyle = C(z.skin);
-        dot(hand[0], hand[1], 0.07, 0.04);
-        if (z.lod > 0) {
-          ctx.strokeStyle = C(z.skin, -0.35); ctx.lineWidth = 0.014;
-          for (let f = -1; f <= 1; f++) {
-            ctx.beginPath(); ctx.moveTo(hand[0] + f * 0.035, hand[1]); ctx.lineTo(hand[0] + f * 0.05, hand[1] + 0.03); ctx.stroke();
-          }
-        }
+        bloodSmear(z, C, el, hand, r.limb * 0.3);
+        drawClaw(z, C, hand, side, 1, true);
       }
 
       // Shoulders
@@ -2399,88 +2605,85 @@
       const hi = (rgb) => (z.lod > 1 ? C(rgb, 0.3, 0.5) : null);
       const hipY = -(r.hip + bob), shY = -(r.shoulder + bob);
 
-      // Thick legs
+      // Thick legs in ripped trousers, huge bare feet
       for (const side of [-1, 1]) {
         const lift = Math.max(0, Math.sin(ph) * side) * 0.12;
         const hip = [side * r.hipW * 0.6, hipY];
         const knee = [side * (r.hipW + 0.08), -(0.6 + lift)];
         const foot = [side * (r.hipW + 0.06), -(0.08 + lift * 0.5)];
         limb([hip, knee], r.limb * 1.15, C(z.pants), OUT, hi(z.pants));
-        limb([knee, foot], r.limb * 0.95, C(z.skin, -0.2), OUT, hi(z.skin));
-        ctx.fillStyle = C(z.skin, -0.35);
-        dot(foot[0], foot[1] + 0.03, 0.15, 0.08);
+        limb([knee, foot], r.limb * 0.95, C(z.pants, -0.1), OUT, hi(z.pants));
+        if (z.lod > 0) { ctx.fillStyle = C(z.skin, -0.15); dot(knee[0], knee[1], r.limb * 0.4, r.limb * 0.3); }
+        drawFoot(z, C, foot, side, 1.8);
       }
-      // Torn shorts
+      // Trouser waist
       ctx.fillStyle = C(z.pants);
       ctx.beginPath(); ctx.roundRect(-r.hipW - 0.1, hipY - 0.1, (r.hipW + 0.1) * 2, 0.34, 0.05); ctx.fill();
 
-      // Barrel chest
+      // Massive bare chest and shoulders
       ctx.beginPath();
       ctx.moveTo(-r.shW, shY + 0.08);
       ctx.bezierCurveTo(-r.shW * 0.5, shY - 0.18, r.shW * 0.5, shY - 0.18, r.shW, shY + 0.08);
       ctx.lineTo(r.hipW + 0.12, hipY);
       ctx.quadraticCurveTo(0, hipY + 0.1, -r.hipW - 0.12, hipY);
       ctx.closePath();
-      const tg = ctx.createLinearGradient(-r.shW, 0, r.shW, 0);
-      tg.addColorStop(0, C(z.skin, 0.12));
-      tg.addColorStop(0.5, C(z.skin));
-      tg.addColorStop(1, C(z.skin, -0.55));
-      ctx.fillStyle = tg;
+      if (z.lod > 0) {
+        const tg = ctx.createLinearGradient(-r.shW, 0, r.shW, 0);
+        tg.addColorStop(0, C(z.skin, 0.12));
+        tg.addColorStop(0.5, C(z.skin));
+        tg.addColorStop(1, C(z.skin, -0.55));
+        ctx.fillStyle = tg;
+      } else {
+        ctx.fillStyle = C(z.skin, -0.1);
+      }
       ctx.fill();
       ctx.lineWidth = 0.03; ctx.strokeStyle = OUT; ctx.stroke();
 
-      // Muscle definition & surgical scar (skipped while the tank is far off)
+      // Stretched dark tank top with a scooped neck, torn at the hem
+      ctx.beginPath();
+      ctx.moveTo(-0.3, shY - 0.02);
+      ctx.lineTo(-0.17, shY - 0.04);
+      ctx.quadraticCurveTo(0, shY + 0.34, 0.17, shY - 0.04);
+      ctx.lineTo(0.3, shY - 0.02);
+      ctx.quadraticCurveTo(0.26, shY + 0.3, r.hipW + 0.13, hipY + 0.02);
+      for (let i = 0; i <= 6; i++) ctx.lineTo(lerp(r.hipW + 0.13, -r.hipW - 0.13, i / 6), hipY + 0.02 + (i % 2 ? 0.08 : 0));
+      ctx.quadraticCurveTo(-0.26, shY + 0.3, -0.3, shY - 0.02);
+      ctx.closePath();
       if (z.lod > 0) {
-        ctx.strokeStyle = C(z.skin, -0.45); ctx.lineWidth = 0.02;
-        ctx.beginPath();
-        ctx.arc(-0.17, shY + 0.22, 0.17, 0.2, Math.PI - 0.4);
-        ctx.moveTo(0.34, shY + 0.26);
-        ctx.arc(0.17, shY + 0.22, 0.17, 0.4, Math.PI - 0.2);
-        for (let i = 0; i < 3; i++) {
-          ctx.moveTo(-0.12, shY + 0.5 + i * 0.13); ctx.lineTo(0.12, shY + 0.5 + i * 0.13);
-        }
-        ctx.moveTo(0, shY + 0.42); ctx.lineTo(0, hipY - 0.05);
-        ctx.stroke();
+        const sg = ctx.createLinearGradient(-0.4, 0, 0.4, 0);
+        sg.addColorStop(0, C(z.shirt, 0.25));
+        sg.addColorStop(1, C(z.shirt, -0.45));
+        ctx.fillStyle = sg;
+      } else {
+        ctx.fillStyle = C(z.shirt);
+      }
+      ctx.fill();
+      ctx.lineWidth = 0.025; ctx.strokeStyle = OUT; ctx.stroke();
+      if (z.lod > 0) {
+        // Blood soaked into the top, and a scar across the bare shoulder
+        ctx.fillStyle = C([92, 10, 10], 0, 0.7);
+        for (const s of z.stains) dot(s.x * 1.6, shY + 0.3 + (s.y - 1.2) * 0.8, s.r * 1.6, s.r * 2);
         ctx.strokeStyle = C([45, 20, 20]); ctx.lineWidth = 0.015;
         ctx.beginPath();
-        ctx.moveTo(-0.38, shY + 0.15); ctx.lineTo(0.05, shY + 0.75);
-        for (let i = 0; i < 7; i++) {
-          const t = i / 6, x = lerp(-0.38, 0.05, t), y = lerp(shY + 0.15, shY + 0.75, t);
-          ctx.moveTo(x - 0.03, y + 0.02); ctx.lineTo(x + 0.03, y - 0.02);
+        ctx.moveTo(-0.46, shY + 0.1); ctx.lineTo(-0.32, shY + 0.32);
+        for (let i = 0; i < 4; i++) {
+          const t = i / 3, x = lerp(-0.46, -0.32, t), y = lerp(shY + 0.1, shY + 0.32, t);
+          ctx.moveTo(x - 0.03, y + 0.015); ctx.lineTo(x + 0.03, y - 0.015);
         }
         ctx.stroke();
       }
       if (z.lod > 1) {
-        // Moonlight along the left flank, and dark veins over the chest
+        // Moonlight along the left flank, and dark veins on the right pec
         ctx.strokeStyle = C(RIM_RGB, 0, 0.5); ctx.lineWidth = 0.03;
         ctx.beginPath(); ctx.moveTo(-r.shW + 0.03, shY + 0.1); ctx.lineTo(-r.hipW - 0.1, hipY - 0.02); ctx.stroke();
         ctx.strokeStyle = C([60, 30, 60], 0, 0.6); ctx.lineWidth = 0.012;
         ctx.beginPath();
-        ctx.moveTo(0.22, shY + 0.12); ctx.lineTo(0.28, shY + 0.3); ctx.lineTo(0.24, shY + 0.42);
-        ctx.moveTo(0.28, shY + 0.3); ctx.lineTo(0.36, shY + 0.38);
+        ctx.moveTo(0.36, shY + 0.1); ctx.lineTo(0.42, shY + 0.26); ctx.lineTo(0.38, shY + 0.38);
+        ctx.moveTo(0.42, shY + 0.26); ctx.lineTo(0.48, shY + 0.32);
         ctx.stroke();
       }
 
-      // Bone spikes erupting from the shoulders
-      ctx.fillStyle = C([220, 210, 180]);
-      for (const side of [-1, 1]) {
-        for (let i = 0; i < 3; i++) {
-          const bx = side * (r.shW - 0.08 - i * 0.12), by = shY + 0.02 + i * 0.03;
-          ctx.beginPath(); ctx.moveTo(bx - 0.04, by); ctx.lineTo(bx + side * 0.03, by - 0.18 + i * 0.04); ctx.lineTo(bx + 0.04, by); ctx.fill();
-        }
-      }
-
-      // Glowing pustules
-      const m = ctx.getTransform();
-      const scale = Math.hypot(m.a, m.b);
-      z.glowSpots = [];
-      for (const g of z.pustules) {
-        ctx.fillStyle = C([70, 130, 40]);
-        dot(g.x, shY + g.y, g.r, g.r);
-        z.glowSpots.push({ p: m.transformPoint({ x: g.x, y: shY + g.y }), r: g.r * scale });
-      }
-
-      // Massive arms hanging to the knees
+      // Massive arms hanging to the knees, bloody to the elbow, clawed hands
       for (const side of [-1, 1]) {
         const swing = Math.sin(ph + (side > 0 ? Math.PI : 0)) * 0.1;
         const sh = [side * (r.shW - 0.05), shY + 0.12];
@@ -2488,10 +2691,8 @@
         const hand = [side * (r.shW + 0.12), -(0.75) + swing];
         limb([sh, el], r.limb * 1.3, C(z.skin, -0.05), OUT, hi(z.skin));
         limb([el, hand], r.limb * 1.15, C(z.skin, -0.12), OUT, hi(z.skin));
-        ctx.fillStyle = C(z.skin, -0.22);
-        dot(hand[0], hand[1], 0.15, 0.13);
-        ctx.strokeStyle = C(z.skin, 0.1); ctx.lineWidth = 0.02;
-        ctx.beginPath(); ctx.moveTo(hand[0] - 0.08, hand[1] + 0.06); ctx.lineTo(hand[0] + 0.08, hand[1] + 0.06); ctx.stroke();
+        bloodSmear(z, C, el, hand, r.limb * 0.5);
+        drawClaw(z, C, hand, side, 2.4, true);
       }
 
       if (!z.headDecapitated) drawZombieHead(z, C, 0, -(r.headY + bob), r.headR, OUT);
@@ -2947,6 +3148,11 @@
         const p = project(e.x, 1, e.z);
         addLight(p.x, p.y, 10 * p.s, 0.9 * a, [255, 140, 50], 0.12 * a);
       }
+      // Falling comets light up the street more and more as they come down
+      for (const c of comets) {
+        const p = cometPath(c);
+        if (p.t > 0) addLight(p.hx, p.hy, H * 0.3, 0.25 + 0.55 * p.t, [255, 150, 60], 0.12);
+      }
     }
 
     function drawLightBlob(c, L, rgb, alpha) {
@@ -3055,6 +3261,7 @@
       renderZombieGlow();
       renderGlowParticles();
       renderExplosions();
+      renderComets();
       ctx.globalCompositeOperation = 'source-over';
     }
 
@@ -3329,7 +3536,8 @@
         lastSpawnTime = gameTime;
       }
 
-      // Airstrike bombs landing
+      // Airstrike comets falling, then blasting where they land
+      updateComets(dt);
       for (let i = pendingBlasts.length - 1; i >= 0; i--) {
         if (gameTime >= pendingBlasts[i].at) {
           const bl = pendingBlasts.splice(i, 1)[0];
@@ -3504,6 +3712,7 @@
       hitMarkers = [];
       explosions = [];
       pendingBlasts = [];
+      comets = [];
       barricadeSmears = [];
       gameTime = 0;
       lastSpawnTime = 0;
