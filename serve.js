@@ -30,7 +30,8 @@ const server = http.createServer((req, res) => {
       res.writeHead(404);
       return res.end('Not found');
     }
-    res.writeHead(200, { 'Content-Type': TYPES[path.extname(filePath)] || 'application/octet-stream' });
+    // no-store: a normal refresh always loads the latest saved version
+    res.writeHead(200, { 'Content-Type': TYPES[path.extname(filePath)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
     res.end(data);
   });
 });
