@@ -138,6 +138,9 @@
         <span id="camStatusText" class="text-zinc-300 tracking-wider">MOUSE MODE</span>
       </div>
 
+      <!-- Camera picker (only shown when more than one camera is connected) -->
+      <select id="camSelect" title="Choose camera" class="hidden absolute bottom-2 left-2 max-w-[55%] px-1 py-0.5 rounded text-[9px] font-hud bg-zinc-900/90 text-zinc-300 border border-zinc-700 pointer-events-auto"></select>
+
       <!-- Gesture Visual Indicator -->
       <div id="pipGestureIndicator" class="absolute bottom-2 right-2 px-2 py-0.5 rounded text-[9px] font-hud font-bold uppercase transition-all duration-150 bg-zinc-900/80 text-emerald-400 border border-emerald-500/30">
         AIM READY
@@ -614,6 +617,7 @@
     const alertBanner = document.getElementById('alertBanner');
     const camStatusDot = document.getElementById('camStatusDot');
     const camStatusText = document.getElementById('camStatusText');
+    const camSelect = document.getElementById('camSelect');
     const pipGestureIndicator = document.getElementById('pipGestureIndicator');
     const hudFps = document.getElementById('hudFps');
 
@@ -815,6 +819,77 @@
     const TRACK_INTERVAL_MS = 1000 / 30 - 2;
     let lastTrackAt = 0, trackSentAt = 0, trackMs = 0;
 
+    // Laptop and virtual cameras, by the names they report. Any other camera is
+    // treated as a plugged-in webcam and preferred over these.
+    const BUILT_IN_CAMERA = /integrated|built-?in|internal|wide vision|facetime|truevision|\bir\b|virtual|omen cam|obs/i;
+    let activeCameraId = '';
+
+    function savedCameraId() {
+      try { return localStorage.getItem('deadfront_camera') || ''; } catch (e) { return ''; }
+    }
+
+    async function openCamera(deviceId) {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        // Small, 30 fps capture: the tracker only needs ~320x240, and every
+        // extra pixel is decoded and copied by the (integrated) GPU
+        video: {
+          width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30, max: 30 },
+          ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' })
+        },
+        audio: false
+      });
+      if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
+      video.srcObject = stream;
+      await video.play();
+      activeCameraId = stream.getVideoTracks()[0].getSettings().deviceId || deviceId || '';
+      camSelect.value = activeCameraId;
+    }
+
+    // Camera names are only visible after permission is granted, so this runs
+    // once a first camera is open. Fills the picker and returns the best camera.
+    async function preferredCamera() {
+      const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+      camSelect.replaceChildren(...cams.map((c, i) => {
+        const opt = document.createElement('option');
+        opt.value = c.deviceId;
+        opt.textContent = (c.label || `Camera ${i + 1}`).replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)$/i, '');
+        return opt;
+      }));
+      camSelect.classList.toggle('hidden', cams.length < 2);
+      camSelect.value = activeCameraId;
+      return cams.find((c) => c.deviceId === savedCameraId()) || cams.find((c) => !BUILT_IN_CAMERA.test(c.label)) || cams[0];
+    }
+
+    async function switchToPreferredCamera() {
+      const best = await preferredCamera();
+      if (best && best.deviceId && best.deviceId !== activeCameraId) {
+        try {
+          await openCamera(best.deviceId);
+        } catch (err) {
+          console.warn(`Could not open ${best.label}, staying on the current camera`, err);
+        }
+      }
+    }
+
+    camSelect.addEventListener('change', async () => {
+      camSelect.blur();
+      try {
+        const chosen = camSelect.value;
+        await openCamera(chosen);
+        try { localStorage.setItem('deadfront_camera', chosen); } catch (err) { /* storage unavailable */ }
+      } catch (err) {
+        console.warn("Could not open the chosen camera", err);
+        camSelect.value = activeCameraId;
+      }
+    });
+
+    // A webcam plugged in (or pulled out) mid-game takes effect straight away
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener('devicechange', () => {
+        if (video.srcObject) switchToPreferredCamera();
+      });
+    }
+
     async function initMediaPipe() {
       if (cameraInstance) return;
       cameraInstance = {};
@@ -822,13 +897,8 @@
       camStatusText.textContent = "OPTICAL INIT...";
 
       try {
-        video.srcObject = await navigator.mediaDevices.getUserMedia({
-          // Small, 30 fps capture: the tracker only needs ~320x240, and every
-          // extra pixel is decoded and copied by the (integrated) GPU
-          video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
-          audio: false
-        });
-        await video.play();
+        await openCamera(savedCameraId() || undefined).catch(() => openCamera());
+        await switchToPreferredCamera();
       } catch (err) {
         console.warn("Camera permission rejected. Falling back to mouse.", err);
         cameraInstance = null;
@@ -1059,7 +1129,7 @@
     /* ============================================================
        4. INPUT & FALLBACK CONTROLS
        ============================================================ */
-    const isUiTarget = (t) => t && t.closest && (t.closest('button') || t.closest('#startModal') || t.closest('#gameOverModal'));
+    const isUiTarget = (t) => t && t.closest && (t.closest('button') || t.closest('select') || t.closest('#startModal') || t.closest('#gameOverModal'));
 
     const isMouseLocked = () => document.pointerLockElement === canvas;
 
