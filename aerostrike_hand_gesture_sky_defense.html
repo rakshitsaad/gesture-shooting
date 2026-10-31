@@ -349,7 +349,21 @@
           this.ctx = new AudioContext();
           this.master = this.ctx.createGain();
           this.master.gain.value = this.muted ? 0 : 1;
-          this.master.connect(this.ctx.destination);
+          // A gentle compressor glues the layered effects together and keeps
+          // rapid fire loud and punchy without clipping
+          this.comp = this.ctx.createDynamicsCompressor();
+          this.comp.threshold.value = -20;
+          this.comp.knee.value = 12;
+          this.comp.ratio.value = 8;
+          this.comp.attack.value = 0.003;
+          this.comp.release.value = 0.15;
+          // Output trim: the compressor adds make-up gain, so bring the
+          // overall level back down to leave headroom (no clipping)
+          this.trim = this.ctx.createGain();
+          this.trim.gain.value = 0.62;
+          this.master.connect(this.comp);
+          this.comp.connect(this.trim);
+          this.trim.connect(this.ctx.destination);
         }
         if (this.ctx.state === 'suspended') {
           this.ctx.resume();
@@ -373,6 +387,32 @@
         return buffer;
       }
 
+      // Short noise bursts reused by the shot and hit sounds, made once
+      // instead of on every shot
+      cachedNoise(seconds, decaySeconds) {
+        const key = seconds + ':' + decaySeconds;
+        this.noiseCache = this.noiseCache || {};
+        return this.noiseCache[key] || (this.noiseCache[key] = this.noiseBuffer(seconds, decaySeconds));
+      }
+
+      // One enveloped voice: source -> filter -> gain -> master
+      voice(src, filterType, f0, f1, q, peak, attack, dur, now) {
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = filterType;
+        filter.Q.value = q;
+        filter.frequency.setValueAtTime(f0, now);
+        filter.frequency.exponentialRampToValueAtTime(f1, now + dur);
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(peak, now + attack);
+        gain.gain.exponentialRampToValueAtTime(0.0008, now + dur);
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.master);
+        src.start(now);
+        src.stop(now + dur + 0.02);
+      }
+
       // Continuous rain bed
       startRain() {
         this.rainStarted = true;
@@ -391,46 +431,60 @@
         src.start();
       }
 
-      // Short descending "pew" zap for each laser shot
+      // Laser cannon shot, in four layers: a resonant dual-oscillator zap
+      // sweeping down, a sub-bass punch for weight, a crackle of energy on
+      // top, and a short metallic ring from the spinning emitters. Pitch
+      // varies a little per shot so automatic fire doesn't sound robotic.
       playLaser() {
         if (this.muted || !this.ctx) return;
-        const now = this.ctx.currentTime;
-
-        const osc = this.ctx.createOscillator();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(1600, now);
-        osc.frequency.exponentialRampToValueAtTime(220, now + 0.12);
-        const filter = this.ctx.createBiquadFilter();
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(4200, now);
-        filter.frequency.exponentialRampToValueAtTime(900, now + 0.12);
-        const gain = this.ctx.createGain();
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(0.16, now + 0.008);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.13);
-        osc.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.master);
-        osc.start(now);
-        osc.stop(now + 0.14);
+        const now = this.ctx.currentTime, v = 0.94 + Math.random() * 0.12;
+        const osc = (type, f0, f1, dur, detune = 0) => {
+          const o = this.ctx.createOscillator();
+          o.type = type; o.detune.value = detune;
+          o.frequency.setValueAtTime(f0 * v, now);
+          o.frequency.exponentialRampToValueAtTime(f1 * v, now + dur);
+          return o;
+        };
+        // Zap: detuned saw + square, through a sweeping resonant low-pass
+        this.voice(osc('sawtooth', 2600, 260, 0.16, -9), 'lowpass', 7000, 1100, 5, 0.085, 0.004, 0.16, now);
+        this.voice(osc('square', 1300, 140, 0.16, 9), 'lowpass', 5000, 800, 3, 0.05, 0.004, 0.16, now);
+        // Sub punch
+        this.voice(osc('sine', 160, 42, 0.12), 'lowpass', 400, 200, 0.7, 0.26, 0.003, 0.13, now);
+        // Energy crackle
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.cachedNoise(0.08, 0.025);
+        this.voice(n, 'highpass', 3200, 6000, 0.8, 0.07, 0.002, 0.07, now);
+        // Emitter ring
+        this.voice(osc('triangle', 3300, 2900, 0.1), 'bandpass', 3100, 3100, 8, 0.03, 0.002, 0.1, now);
       }
 
+      // The beam burning into a zombie: a hot sizzle plus a dull, wet thud
+      playLaserHit(headshot = false) {
+        if (this.muted || !this.ctx) return;
+        const now = this.ctx.currentTime;
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.cachedNoise(0.18, 0.06);
+        this.voice(n, 'bandpass', 2400, 900, 1.6, headshot ? 0.14 : 0.1, 0.003, 0.16, now);
+        const o = this.ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.setValueAtTime(headshot ? 220 : 170, now);
+        o.frequency.exponentialRampToValueAtTime(55, now + 0.12);
+        this.voice(o, 'lowpass', 600, 300, 0.7, headshot ? 0.2 : 0.15, 0.003, 0.13, now);
+      }
+
+      // Headshot: a squelchy burst of gore on top of the laser hit
       playHeadshotSplat() {
         if (this.muted || !this.ctx) return;
         const now = this.ctx.currentTime;
-
-        // Squishy high splat
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(650, now);
-        osc.frequency.exponentialRampToValueAtTime(90, now + 0.14);
-        gain.gain.setValueAtTime(0.4, now);
-        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.14);
-        osc.connect(gain);
-        gain.connect(this.master);
-        osc.start(now);
-        osc.stop(now + 0.14);
+        this.playLaserHit(true);
+        const o = this.ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(700, now);
+        o.frequency.exponentialRampToValueAtTime(80, now + 0.16);
+        this.voice(o, 'lowpass', 1800, 300, 2, 0.14, 0.004, 0.17, now);
+        const n = this.ctx.createBufferSource();
+        n.buffer = this.cachedNoise(0.22, 0.08);
+        this.voice(n, 'lowpass', 1400, 250, 1, 0.18, 0.004, 0.2, now);
       }
 
       playZombieGroan(isBoss = false) {
@@ -1875,6 +1929,7 @@
 
     function onBodyHit(z) {
       z.hp -= 2;
+      audio.playLaserHit(false);
       z.flash = 0.12;
       z.z += z.type === 'tank' ? 0.25 : 0.7; // Knockback
       score += 60;
@@ -1938,7 +1993,7 @@
     // side, and falls (accelerating) onto its impact point on the road.
     // Everything is computed in screen space from the time, so no per-comet
     // physics is needed.
-    const COMET_FALL = 0.75;   // seconds from the sky to impact
+    const COMET_FALL = 0.55;   // seconds from the sky to impact
     function cometPath(c) {
       const g = project(c.x, 0.3, c.z);
       const sx = g.x + c.side * W * c.ox, sy = -H * 0.08;
@@ -2309,7 +2364,7 @@
         dot(-R * 0.07, R * 0.25, R * 0.05, R * 0.075);
         dot(R * 0.07, R * 0.25, R * 0.05, R * 0.075);
       }
-      const m = ctx.getTransform();
+      const m = sceneMatrix();
       z.eyes = [m.transformPoint({ x: -ex, y: ey }), m.transformPoint({ x: ex, y: ey })];
       z.eyeR = Math.hypot(m.a, m.b) * R * 0.14;
 
@@ -2342,7 +2397,7 @@
       dot(0, y, 0.065, 0.032);
       ctx.fillStyle = C([210, 200, 180]);
       dot(0, y - 0.005, 0.016, 0.011);
-      const m = ctx.getTransform();
+      const m = sceneMatrix();
       z.stumpPos = m.transformPoint({ x: 0, y });
     }
 
@@ -2872,173 +2927,168 @@
     /* ============================================================
        11. LASER CANNON
        ------------------------------------------------------------
-       A chunky sci-fi laser cannon held low on the right, aimed at the
-       crosshair, firing a beam from its four red emitters. The cannon is
+       A chunky sci-fi laser cannon held in front of the player, seen from
+       behind and pointing forward into the street: its far muzzle (with the
+       spinning emitter sleeve) sits below the middle of the screen and the
+       body widens toward the camera, running off the bottom edge. It is
        painted once (on start and on resize) into a sprite with all its
-       shading, so each frame it costs a single rotated drawImage. The beam
-       is three filled strips and two glow sprites.
+       shading, so each frame it costs one drawImage plus a few strokes for
+       the spinning sleeve. The beam is three filled strips and two glows.
        ============================================================ */
     const LASER_RGB = [255, 50, 70];
     const SPR_LASER = makeSoftSprite(LASER_RGB);
     const laser = { flash: 0 };                          // 1 on a shot, fades out in ~0.09 s
 
-    // Sprite units: the bore runs along x from the muzzle (x = 0) to the rear
-    // (x = GUN_LEN); the far muzzle is drawn smaller than the rear (perspective)
-    const GUN_LEN = 1000, GUN_R = 150;
-    const GUN_PAD = 60, GUN_TOP = 560, GUN_BOT = 330;    // room for handles above, vent drum below
-    const gunRad = (x) => GUN_R * (0.62 + 0.38 * x / GUN_LEN);
-    const P_TEAL = ['#4b6f75', '#30525a', '#1b3338', '#0a1416'];
-    const P_TEAL_DK = ['#3a5a60', '#23414a', '#14272b', '#081012'];
-    const P_WHITE = ['#e9ece7', '#c8ccc7', '#979c97', '#575b57'];
-    const P_BLACK = ['#3c3c3c', '#262626', '#151515', '#070707'];
+    // Sprite units: the bore runs down the sprite from the far muzzle (y = 0)
+    // to the near rear end (y = GUN_LEN). Radius grows toward the camera
+    // (perspective) and cross-sections are flattened ellipses (seen from
+    // slightly above).
+    const GUN_LEN = 1000, GUN_R0 = 40, GUN_R1 = 260, GUN_SQ = 0.34;
+    const GUN_HALF = 470, GUN_TOP = 260;                 // sprite half-width; room above the muzzle
+    const gunRad = (y) => GUN_R0 + (GUN_R1 - GUN_R0) * (y / GUN_LEN);
+    const P_TEAL = ['#30525a', '#4b6f75', '#1b3338', '#0a1416'];
+    const P_TEAL_DK = ['#23414a', '#3a5a60', '#14272b', '#081012'];
+    const P_WHITE = ['#c8ccc7', '#eef0ec', '#979c97', '#575b57'];
     let gunSprite = null, gunScale = 1;
-    // Smoothed aim point, recoil kick (px) and this frame's pose
-    const gun = { ax: null, ay: 0, kick: 0, spin: 0, spinV: 0, px: 0, py: 0, ang: 0, muzzle: { x: 0, y: 0 } };
+    // Smoothed aim point, recoil kick (px), barrel spin and this frame's pose
+    const gun = { ax: null, ay: 0, kick: 0, spin: 0, spinV: 0, mx: 0, my: 0, lean: 0, muzzle: { x: 0, y: 0 } };
 
-    // A tapered cylinder section with rounded ends, shaded top-lit
-    function gunSection(g, x0, x1, m0, m1, pal, y = 0, r0 = gunRad(x0) * m0, r1 = gunRad(x1) * m1) {
-      const rm = Math.max(r0, r1);
-      const grad = g.createLinearGradient(0, y - rm, 0, y + rm);
-      grad.addColorStop(0, pal[0]); grad.addColorStop(0.22, pal[1]); grad.addColorStop(0.62, pal[2]); grad.addColorStop(1, pal[3]);
+    // One section of the body between y0 and y1: side lines plus the top
+    // half of the far end and the bottom half of the near end, lit from the
+    // upper left. Nearer sections are drawn later, overlapping the far ones.
+    function gunFrustum(g, y0, y1, m0, m1, pal) {
+      const a = gunRad(y0) * m0, b = gunRad(y1) * m1, rm = Math.max(a, b);
+      const grad = g.createLinearGradient(-rm, 0, rm, 0);
+      grad.addColorStop(0, pal[0]); grad.addColorStop(0.3, pal[1]); grad.addColorStop(0.65, pal[2]); grad.addColorStop(1, pal[3]);
       g.fillStyle = grad;
       g.beginPath();
-      g.moveTo(x0, y - r0);
-      g.lineTo(x1, y - r1);
-      g.ellipse(x1, y, r1 * 0.22, r1, 0, -Math.PI / 2, Math.PI / 2);
-      g.lineTo(x0, y + r0);
-      g.ellipse(x0, y, r0 * 0.22, r0, 0, Math.PI / 2, Math.PI * 1.5);
+      g.moveTo(-a, y0);
+      g.ellipse(0, y0, a, a * GUN_SQ, 0, Math.PI, Math.PI * 2);
+      g.lineTo(b, y1);
+      g.ellipse(0, y1, b, b * GUN_SQ, 0, 0, Math.PI);
       g.closePath();
       g.fill();
       g.strokeStyle = 'rgba(0,0,0,0.65)'; g.lineWidth = 3; g.stroke();
+      return { a, b };
     }
 
-    function gunSeam(g, x, bend) {
-      const r = gunRad(x) * 0.98;
-      g.lineCap = 'round';
-      for (const [col, dx, w] of [['rgba(0,0,0,0.7)', 0, 3.5], ['rgba(140,175,180,0.25)', 3, 1.5]]) {
-        g.strokeStyle = col; g.lineWidth = w;
-        g.beginPath(); g.moveTo(x + dx, -r); g.quadraticCurveTo(x + dx + bend, 0, x + dx, r); g.stroke();
-      }
-    }
-
-    function gunPanel(g, x, y, w, h) {
-      g.fillStyle = '#152a2e'; g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 3;
-      g.beginPath(); g.roundRect(x, y, w, h, 8); g.fill(); g.stroke();
-      g.strokeStyle = 'rgba(120,160,165,0.25)'; g.lineWidth = 1.5;
-      g.beginPath(); g.roundRect(x + 4, y + 4, w - 8, h - 8, 6); g.stroke();
+    // A panel seam wrapping round the near side of the body at y
+    function gunRing(g, y, m) {
+      const r = gunRad(y) * m;
+      g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 4;
+      g.beginPath(); g.ellipse(0, y, r, r * GUN_SQ, 0, 0.08, Math.PI - 0.08); g.stroke();
+      g.strokeStyle = 'rgba(140,175,180,0.22)'; g.lineWidth = 2;
+      g.beginPath(); g.ellipse(0, y + 4, r, r * GUN_SQ, 0, 0.15, Math.PI - 0.15); g.stroke();
     }
 
     function drawGunModel(g) {
-      // Vent drum hanging under the rear, then the body back to front
-      const dr = 78, dy = gunRad(860) + 52;
-      gunSection(g, 790, 945, 1, 1, P_TEAL_DK, dy, dr, dr);
-      g.strokeStyle = 'rgba(0,0,0,0.75)'; g.lineWidth = 6; g.lineCap = 'round';
-      for (let i = 0; i < 5; i++) { g.beginPath(); g.moveTo(905, dy - 48 + i * 24); g.lineTo(935, dy - 48 + i * 24); g.stroke(); }
-      gunSection(g, 958, 1000, 0.8, 0.76, P_WHITE);                 // rear end cap
-      gunSection(g, 560, 965, 0.97, 1.0, P_TEAL);                   // rear body
-      gunSection(g, 465, 575, 0.8, 0.82, P_TEAL_DK);                // narrow neck
-      gunSection(g, 200, 480, 1.0, 1.0, P_TEAL);                    // front body
-      gunSection(g, 116, 210, 0.8, 1.0, P_TEAL);                    // cone
-      gunSection(g, 0, 124, 0.78, 0.8, P_WHITE);                    // white muzzle sleeve
-      // (The sleeve's facets and the emitter face spin, so drawSpinningMuzzle
-      // draws them live each frame over this sprite.)
+      // Body, far to near
+      gunFrustum(g, 0, 95, 0.85, 0.85, P_WHITE);                   // white muzzle sleeve
+      gunFrustum(g, 95, 165, 0.9, 1.12, P_TEAL);                   // cone
+      gunFrustum(g, 165, 430, 1.12, 1.12, P_TEAL);                 // front body
+      gunFrustum(g, 430, 505, 0.94, 0.94, P_TEAL_DK);              // narrow neck
+      gunFrustum(g, 505, 1000, 1.06, 1.06, P_TEAL);                // rear body
+      gunRing(g, 300, 1.12); gunRing(g, 660, 1.06); gunRing(g, 860, 1.06);
 
-      // Front body: seams, side panel with status lights, red button, top strip
-      gunSeam(g, 300, 26); gunSeam(g, 445, -22);
-      gunPanel(g, 318, -20, 78, 84);
-      g.fillStyle = '#9dff3a'; g.fillRect(345, 18, 10, 10);
-      g.fillStyle = '#ff3b2a'; g.fillRect(358, 18, 10, 10);
-      const rt = gunRad(280);
-      g.fillStyle = '#dfe2dd'; g.fillRect(244, -rt - 16, 76, 20);
-      const bg = g.createLinearGradient(0, -rt - 44, 0, -rt - 14);
+      // Far rim of the sleeve, and a dark band where it meets the cone
+      const r0 = gunRad(0) * 0.85;
+      g.strokeStyle = '#4c514d'; g.lineWidth = 4;
+      g.beginPath(); g.ellipse(0, 0, r0, r0 * GUN_SQ, 0, Math.PI, Math.PI * 2); g.stroke();
+
+      // Raised strip and red button along the top of the front body
+      const topY = (y, m) => y - gunRad(y) * m * GUN_SQ;
+      g.fillStyle = '#2b4a50'; g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 3;
+      g.beginPath();
+      g.moveTo(-14, topY(250, 1.12) - 4); g.lineTo(14, topY(250, 1.12) - 4);
+      g.lineTo(22, topY(410, 1.12) - 6); g.lineTo(-22, topY(410, 1.12) - 6);
+      g.closePath(); g.fill(); g.stroke();
+      const by = topY(205, 1.12);
+      g.fillStyle = '#dfe2dd'; g.fillRect(-34, by - 14, 68, 16);
+      const bg = g.createLinearGradient(0, by - 40, 0, by - 12);
       bg.addColorStop(0, '#ff5a4a'); bg.addColorStop(1, '#a8100f');
-      g.fillStyle = bg; g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 3;
-      g.beginPath(); g.roundRect(252, -rt - 42, 60, 30, 6); g.fill(); g.stroke();
-      const rs = gunRad(400);
-      g.fillStyle = '#2b4a50'; g.strokeStyle = 'rgba(0,0,0,0.7)';
-      g.beginPath(); g.roundRect(335, -rs - 14, 130, 22, 6); g.fill(); g.stroke();
+      g.fillStyle = bg; g.beginPath(); g.roundRect(-26, by - 38, 52, 26, 6); g.fill(); g.stroke();
 
-      // Rear body: seams, bolts and the "III" charge panel
-      gunSeam(g, 700, 0); gunSeam(g, 870, 0);
-      g.fillStyle = '#8a908b';
-      for (const [bx, by] of [[730, -40], [790, -95], [840, -60]]) { g.beginPath(); g.arc(bx, by, 6, 0, Math.PI * 2); g.fill(); }
-      gunPanel(g, 888, -30, 62, 80);
+      // Status panel on the right flank of the front body
+      const pr = gunRad(330) * 1.12;
+      g.fillStyle = '#152a2e'; g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 3;
+      g.beginPath(); g.roundRect(pr * 0.5, 300, 60, 58, 8); g.fill(); g.stroke();
+      g.fillStyle = '#9dff3a'; g.fillRect(pr * 0.5 + 18, 322, 10, 10);
+      g.fillStyle = '#ff3b2a'; g.fillRect(pr * 0.5 + 32, 322, 10, 10);
+
+      // "III" charge panel on the right flank of the rear body
+      const rr = gunRad(780) * 1.06;
+      g.fillStyle = '#152a2e';
+      g.beginPath(); g.roundRect(rr * 0.55, 740, 80, 96, 10); g.fill(); g.stroke();
       g.fillStyle = '#b6ff3c';
-      for (let i = 0; i < 3; i++) g.fillRect(903 + i * 12, -6, 7, 32);
+      for (let i = 0; i < 3; i++) g.fillRect(rr * 0.55 + 18 + i * 17, 762, 9, 50);
 
-      // Carry handle on top: white brackets, black ridged grip, red trigger lever
-      const hy = -gunRad(800) - 120;
-      for (const bx of [690, 900]) {
-        gunSection(g, bx - 22, bx + 22, 1, 1, P_WHITE, hy + 58, 60, 60);
+      // Carry handle on top of the rear: white brackets, black ridged grip
+      const b1 = topY(640, 1.06), b2 = topY(900, 1.06);
+      const h1 = b1 - 95, h2 = b2 - 125;
+      for (const [y, h, w] of [[b1, h1, 34], [b2, h2, 44]]) {
+        const wg = g.createLinearGradient(-w, 0, w, 0);
+        wg.addColorStop(0, '#c8ccc7'); wg.addColorStop(0.35, '#eef0ec'); wg.addColorStop(1, '#6d726e');
+        g.fillStyle = wg; g.strokeStyle = 'rgba(0,0,0,0.7)';
+        g.beginPath(); g.roundRect(-w, h - 10, w * 2, y - h + 14, 10); g.fill(); g.stroke();
       }
-      g.fillStyle = '#1b1b1b'; g.strokeStyle = 'rgba(0,0,0,0.9)'; g.lineWidth = 3;
-      g.beginPath(); g.roundRect(670, hy - 18, 260, 38, 18); g.fill(); g.stroke();
-      g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 2;
-      for (let x = 690; x < 920; x += 14) { g.beginPath(); g.moveTo(x, hy - 14); g.lineTo(x, hy + 16); g.stroke(); }
-      g.fillStyle = '#c4161b';
-      g.beginPath(); g.moveTo(830, hy + 18); g.lineTo(870, hy + 34); g.lineTo(862, hy + 44); g.lineTo(826, hy + 26); g.closePath(); g.fill();
-
-      // Crank-style front grip: an arm bolted to the neck, a rubber grip at its top
       g.lineCap = 'round';
-      g.strokeStyle = '#0b1517'; g.lineWidth = 42;
-      g.beginPath(); g.moveTo(585, 20); g.lineTo(545, -320); g.stroke();
-      g.strokeStyle = '#23414a'; g.lineWidth = 32;
-      g.beginPath(); g.moveTo(585, 20); g.lineTo(545, -320); g.stroke();
-      g.strokeStyle = 'rgba(140,175,180,0.3)'; g.lineWidth = 6;
-      g.beginPath(); g.moveTo(574, 14); g.lineTo(535, -318); g.stroke();
-      for (const [bx, by] of [[585, 20], [545, -320]]) {
-        g.fillStyle = '#b8bdb8'; g.beginPath(); g.arc(bx, by, 15, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#5c615d'; g.beginPath(); g.arc(bx, by, 7, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#070707'; g.lineWidth = 50;
+      g.beginPath(); g.moveTo(0, h1 + 6); g.lineTo(0, h2 + 8); g.stroke();
+      g.strokeStyle = '#262626'; g.lineWidth = 40;
+      g.beginPath(); g.moveTo(0, h1 + 6); g.lineTo(0, h2 + 8); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,0.08)'; g.lineWidth = 3;
+      for (let t = 0.1; t < 0.95; t += 0.1) {
+        const y = lerp(h1, h2, t), w = lerp(18, 24, t);
+        g.beginPath(); g.moveTo(-w, y); g.lineTo(w, y); g.stroke();
       }
-      g.strokeStyle = '#070707'; g.lineWidth = 48;
-      g.beginPath(); g.moveTo(540, -330); g.lineTo(430, -455); g.stroke();
-      g.strokeStyle = '#242424'; g.lineWidth = 38;
-      g.beginPath(); g.moveTo(540, -330); g.lineTo(430, -455); g.stroke();
+
+      // Crank-style front grip sticking out to the right of the neck
+      const nx = gunRad(468) * 0.94;
+      g.strokeStyle = '#0b1517'; g.lineWidth = 44;
+      g.beginPath(); g.moveTo(nx - 20, 470); g.lineTo(nx + 140, 420); g.stroke();
+      g.strokeStyle = '#23414a'; g.lineWidth = 34;
+      g.beginPath(); g.moveTo(nx - 20, 470); g.lineTo(nx + 140, 420); g.stroke();
+      for (const [bx, bY] of [[nx - 20, 470], [nx + 140, 420]]) {
+        g.fillStyle = '#b8bdb8'; g.beginPath(); g.arc(bx, bY, 16, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#5c615d'; g.beginPath(); g.arc(bx, bY, 7, 0, Math.PI * 2); g.fill();
+      }
+      g.strokeStyle = '#070707'; g.lineWidth = 52;
+      g.beginPath(); g.moveTo(nx + 150, 410); g.lineTo(nx + 230, 270); g.stroke();
+      g.strokeStyle = '#242424'; g.lineWidth = 42;
+      g.beginPath(); g.moveTo(nx + 150, 410); g.lineTo(nx + 230, 270); g.stroke();
       g.strokeStyle = 'rgba(255,255,255,0.09)'; g.lineWidth = 3;
-      for (let t = 0.08; t < 1; t += 0.09) {
-        const x = lerp(540, 430, t), y = lerp(-330, -455, t);
-        g.beginPath(); g.moveTo(x - 14, y + 12); g.lineTo(x + 14, y - 12); g.stroke();
+      for (let t = 0.08; t < 1; t += 0.1) {
+        const x = lerp(nx + 150, nx + 230, t), y = lerp(410, 270, t);
+        g.beginPath(); g.moveTo(x - 18, y - 10); g.lineTo(x + 18, y + 10); g.stroke();
       }
     }
 
-    // The minigun-style front: sleeve facets rolling round the bore and the
-    // four red emitters orbiting it. A few strokes and fills, in sprite units.
+    // The minigun-style sleeve: facet edges rolling round the bore, drawn
+    // live each frame over the sprite (a few strokes, in sprite units)
     function drawSpinningMuzzle(g, spin) {
-      const r0 = gunRad(0) * 0.78, r1 = gunRad(124) * 0.8;
-      // Facet edges on the near half of the sleeve (cos > 0 faces the camera)
       g.lineWidth = 3;
       for (let k = 0; k < 6; k++) {
         const a = spin + k * Math.PI / 3, c = Math.cos(a), sn = Math.sin(a);
         if (c <= 0) continue;
-        g.strokeStyle = `rgba(0,0,0,${0.35 * c})`;
-        g.beginPath(); g.moveTo(4, r0 * sn * 0.97); g.lineTo(122, r1 * sn * 0.97); g.stroke();
-      }
-      const fx = r0 * 0.36, fy = r0 * 0.92, lr = r0 * 0.24;
-      g.fillStyle = '#1a1d1e'; g.strokeStyle = '#6d726e'; g.lineWidth = 4;
-      g.beginPath(); g.ellipse(0, 0, fx, fy, 0, 0, Math.PI * 2); g.fill(); g.stroke();
-      for (let k = 0; k < 4; k++) {
-        const a = spin + k * Math.PI / 2;
-        const lx = Math.cos(a) * fx * 0.5, ly = Math.sin(a) * fy * 0.47;
-        g.fillStyle = '#0b0b0b'; g.beginPath(); g.ellipse(lx, ly, lr * 0.66, lr * 1.06, 0, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#d3121c'; g.beginPath(); g.ellipse(lx, ly, lr * 0.56, lr * 0.92, 0, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#ff8a7a'; g.beginPath(); g.ellipse(lx - lr * 0.1, ly - lr * 0.2, lr * 0.22, lr * 0.34, 0, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = `rgba(0,0,0,${0.4 * c})`;
+        const r0 = gunRad(4) * 0.85, r1 = gunRad(92) * 0.85;
+        g.beginPath(); g.moveTo(r0 * sn * 0.97, 4 - r0 * GUN_SQ * c * 0.9); g.lineTo(r1 * sn * 0.97, 92 - r1 * GUN_SQ * c * 0.9); g.stroke();
       }
     }
 
     function buildGunSprite() {
-      gunScale = (H * 1.05) / GUN_LEN;   // held close: about half of it is on screen
+      gunScale = (H * 0.75) / GUN_LEN;   // the rear half runs off the bottom of the screen
       const s = gunScale;
-      gunSprite = makeCanvas((GUN_LEN + GUN_PAD * 2) * s, (GUN_TOP + GUN_BOT) * s);
+      gunSprite = makeCanvas(GUN_HALF * 2 * s, (GUN_TOP + GUN_LEN + 120) * s);
       const g = gunSprite.getContext('2d');
       g.scale(s, s);
-      g.translate(GUN_PAD, GUN_TOP);   // origin: muzzle centre, on the bore
+      g.translate(GUN_HALF, GUN_TOP);   // origin: the far muzzle, on the bore
       drawGunModel(g);
     }
 
-    // Aim follows the crosshair with a little weight. The cannon is held close
-    // and low on the right: the muzzle sits right of and below the crosshair,
-    // pointing straight at it, and the rear half runs off past the bottom-right
-    // corner, so it feels like it's in your hands.
+    // Aim follows the crosshair with a little weight. The cannon is held at
+    // the bottom centre pointing forward; it slides left/right and up/down
+    // with the aim and leans toward it. The beam goes to the crosshair.
     function updateLaser(dt) {
       laser.flash = Math.max(0, laser.flash - dt / 0.09);
       if (gun.ax === null) { gun.ax = reticle.x; gun.ay = reticle.y; }
@@ -3052,14 +3102,15 @@
       gun.spinV += ((firing ? 26 : 0) - gun.spinV) * (1 - Math.exp(-dt * (firing ? 6 : 2.5)));
       gun.spin += gun.spinV * dt;
 
-      const bobY = Math.sin(time * 1.8) * H * 0.005;
-      let mx = W * 0.5 + H * 0.44 + (gun.ax - W / 2) * 0.3;
-      let my = H * 0.7 + (gun.ay - H / 2) * 0.15 + bobY;
-      const ang = clamp(Math.atan2(gun.ay - my, gun.ax - mx), -Math.PI * 0.97, -Math.PI * 0.62);
-      mx -= Math.cos(ang) * gun.kick; my -= Math.sin(ang) * gun.kick;
-      const len = GUN_LEN * gunScale;
-      gun.muzzle = { x: mx, y: my };
-      gun.px = mx - Math.cos(ang) * len; gun.py = my - Math.sin(ang) * len; gun.ang = ang;
+      // Breathing bob, and a slight side-to-side sway as if walking
+      const bobX = Math.sin(time * 0.9) * H * 0.004, bobY = Math.sin(time * 1.8) * H * 0.006;
+      const offX = (gun.ax - W / 2) / W, offY = (gun.ay - H / 2) / H;   // -0.5..0.5
+      // Always pointing straight ahead (same angle as in the centre); the
+      // whole cannon slides left/right and up/down to follow the aim
+      gun.lean = 0;
+      gun.mx = W * 0.5 + offX * W * 0.7 + bobX;
+      gun.my = H * 0.72 + offY * H * 0.3 + bobY + gun.kick;   // recoil pulls it back toward you
+      gun.muzzle = { x: gun.mx, y: gun.my };
     }
 
     const laserOrigin = () => gun.muzzle;
@@ -3067,10 +3118,9 @@
     function renderGun() {
       if (!isRunning || !gunSprite) return;
       ctx.save();
-      ctx.translate(gun.px, gun.py);
-      ctx.rotate(gun.ang - Math.PI);   // the sprite's muzzle points along -x
-      ctx.drawImage(gunSprite, -(GUN_LEN + GUN_PAD) * gunScale, -GUN_TOP * gunScale);
-      ctx.translate(-GUN_LEN * gunScale, 0);   // to the muzzle, in sprite units
+      ctx.translate(gun.mx, gun.my);
+      ctx.rotate(gun.lean);
+      ctx.drawImage(gunSprite, -GUN_HALF * gunScale, -GUN_TOP * gunScale);
       ctx.scale(gunScale, gunScale);
       drawSpinningMuzzle(ctx, gun.spin);
       ctx.restore();
@@ -3092,17 +3142,17 @@
     function renderLaser() {
       if (!isRunning) return;
       renderGun();
-      const o = laserOrigin(), a = laser.flash, u = gunScale * gunRad(0) * 0.78;   // muzzle radius on screen
+      const o = laserOrigin(), a = laser.flash, u = gunScale * GUN_R0 * 0.85;   // muzzle radius on screen
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       // The emitters glow faintly between shots and flare on each one
-      drawSprite(SPR_LASER, o.x, o.y, u * (1.1 + 1.6 * a), 0.25 + 0.6 * a);
+      drawSprite(SPR_LASER, o.x, o.y, u * (1.6 + 2.2 * a), 0.35 + 0.6 * a);
       if (a > 0) {
         const tx = reticle.x, ty = reticle.y;
         // Soft glow, bright body and white-hot core, narrowing toward the target
-        ctx.fillStyle = rgba(LASER_RGB, 0.18 * a); beamStrip(o.x, o.y, tx, ty, u * 0.9, 8);
-        ctx.fillStyle = rgba(LASER_RGB, 0.6 * a); beamStrip(o.x, o.y, tx, ty, u * 0.36, 3);
-        ctx.fillStyle = `rgba(255,235,240,${0.95 * a})`; beamStrip(o.x, o.y, tx, ty, u * 0.13, 1.2);
+        ctx.fillStyle = rgba(LASER_RGB, 0.18 * a); beamStrip(o.x, o.y, tx, ty, u * 1.4, 8);
+        ctx.fillStyle = rgba(LASER_RGB, 0.6 * a); beamStrip(o.x, o.y, tx, ty, u * 0.6, 3);
+        ctx.fillStyle = `rgba(255,235,240,${0.95 * a})`; beamStrip(o.x, o.y, tx, ty, u * 0.22, 1.2);
         drawSprite(SPR_LASER, tx, ty, 26 * (0.7 + 0.3 * a), 0.9 * a);
         drawSprite(SPR.warm, tx, ty, 8, a);
       }
@@ -3404,12 +3454,21 @@
       ctx.restore();
     }
 
+    // Inverse of the scene's base transform (render scale + screen shake).
+    // Points saved while drawing a zombie (eyes, neck stump) are mapped back
+    // through it, so they're in the same coordinates as the glow layer that
+    // draws them later. Without this they were scaled twice once auto quality
+    // lowered the resolution, and the eyes floated up toward the sky.
+    let sceneInv = new DOMMatrix();
+    function sceneMatrix() { return sceneInv.multiply(ctx.getTransform()); }
+
     function render() {
       ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, W, H);
       ctx.save();
       ctx.translate(shakeX, shakeY);
+      sceneInv = ctx.getTransform().inverse();
 
       // 1. Sky, clouds, lightning, then the street scene
       ctx.drawImage(skyCanvas, 0, 0);
