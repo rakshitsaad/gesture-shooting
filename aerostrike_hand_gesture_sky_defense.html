@@ -157,7 +157,7 @@
 
     <div class="hud-glass text-[11px] font-medium text-zinc-400 bg-zinc-950/85 border border-zinc-800/90 px-3 py-1.5 rounded-lg flex items-center justify-between font-hud">
       <span>FPS: <strong id="hudFps" class="text-red-400">--</strong></span>
-      <span>👊 FIST: <strong class="text-amber-400">AIRSTRIKE</strong></span>
+      <span>🔫 <strong id="shootHint" class="text-rose-400">THUMB DOWN</strong> · 👊 <strong class="text-amber-400">AIRSTRIKE</strong></span>
     </div>
   </div>
 
@@ -200,8 +200,8 @@
           <div class="flex items-center space-x-2 text-rose-400 font-bold mb-1 font-hud text-xs">
             <span class="text-base">🔫</span> <span>2. SHOOT</span>
           </div>
-          <p class="text-xs text-zinc-300 leading-relaxed">
-            <strong class="text-rose-400">Pinch Thumb & Index</strong> together or hold Left-Click. Aim for head for <strong class="text-emerald-400">3x HEADSHOT CRIT</strong>!
+          <p id="shootHelp" class="text-xs text-zinc-300 leading-relaxed">
+            Make a <strong class="text-rose-400">Finger Gun</strong> and <strong class="text-rose-400">drop your thumb</strong> to fire (hold it down for full-auto), or hold Left-Click. Aim for head for <strong class="text-emerald-400">3x HEADSHOT CRIT</strong>! <span class="text-zinc-500">[G] switches to pinch.</span>
           </p>
         </div>
 
@@ -1081,7 +1081,35 @@
     let handTracker = null;
     let cameraInstance = null;
     let isCameraActive = false;
-    const handState = { pinching: false, fistStart: 0, fistFired: false };
+    const handState = { pinching: false, hammerDown: false, fistStart: 0, fistFired: false };
+
+    // Shooting gesture: 'gun' (finger gun, drop the thumb like a hammer) or
+    // 'pinch' (thumb to index fingertip). G switches in game; remembered.
+    let shootGesture = 'gun';
+    try { if (localStorage.getItem('deadfront_shoot_gesture') === 'pinch') shootGesture = 'pinch'; } catch (e) { /* storage unavailable */ }
+    function setShootGesture(g) {
+      shootGesture = g;
+      handState.pinching = handState.hammerDown = false;
+      try { localStorage.setItem('deadfront_shoot_gesture', g); } catch (e) { /* storage unavailable */ }
+    }
+
+    // 3D helpers. MediaPipe's z (depth) is on roughly the same scale as x,
+    // so a finger pointed straight at the camera still measures as long and
+    // straight even though it looks short in the picture.
+    const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, (a.z || 0) - (b.z || 0));
+    // How straight a finger is at its middle joint: 1 = straight, < 0.3 = curled
+    function straightness(m, base, mid, tip) {
+      const ax = m[mid].x - m[base].x, ay = m[mid].y - m[base].y, az = (m[mid].z || 0) - (m[base].z || 0);
+      const bx = m[tip].x - m[mid].x, by = m[tip].y - m[mid].y, bz = (m[tip].z || 0) - (m[mid].z || 0);
+      return (ax * bx + ay * by + az * bz) / Math.max(1e-6, Math.hypot(ax, ay, az) * Math.hypot(bx, by, bz));
+    }
+    // Distance from point p to the segment a-b, in 3D
+    function segDist3(p, a, b) {
+      const vx = b.x - a.x, vy = b.y - a.y, vz = (b.z || 0) - (a.z || 0);
+      const wx = p.x - a.x, wy = p.y - a.y, wz = (p.z || 0) - (a.z || 0);
+      const t = clamp((wx * vx + wy * vy + wz * vz) / Math.max(1e-9, vx * vx + vy * vy + vz * vz), 0, 1);
+      return Math.hypot(wx - vx * t, wy - vy * t, wz - vz * t);
+    }
 
     // One-Euro filter: heavy smoothing when the hand is nearly still (kills
     // tracking jitter), light smoothing when it moves fast (keeps lag low).
@@ -1358,6 +1386,7 @@
       if (!marks) {
         handFiring = false;
         handState.pinching = false;
+        handState.hammerDown = false;
         handState.fistStart = 0;
         aimFilterX.reset();
         camAim.last = 0;
@@ -1378,12 +1407,18 @@
 
       // Distances are measured relative to palm size so gestures work at any distance from the camera
       const palm = Math.max(0.02, dist2D(marks[0], marks[9]));
+      const palm3 = Math.max(0.02, dist3(marks[0], marks[9]));
       const pinchRatio = dist2D(marks[4], marks[8]) / palm;
+      // A finger counts as curled if its tip is tucked near the wrist in the
+      // picture, or it is clearly bent at the middle joint in 3D
+      const curled = (base, mid, tip) => dist2D(marks[tip], marks[0]) < palm * 1.2 || straightness(marks, base, mid, tip) < 0.3;
+      const indexStraight = straightness(marks, 5, 6, 8) > 0.55;
       let folded = 0;
-      for (const idx of [8, 12, 16, 20]) {
-        if (dist2D(marks[idx], marks[0]) < palm * 1.2) folded++;
-      }
-      const indexFolded = dist2D(marks[8], marks[0]) < palm * 1.2;
+      for (const [b, m, t] of [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]) if (curled(b, m, t)) folded++;
+      const othersCurled = [[9, 10, 12], [13, 14, 16], [17, 18, 20]].filter(([b, m, t]) => curled(b, m, t)).length;
+      const indexFolded = !indexStraight && curled(5, 6, 8);
+      // A straight index finger is never a fist, so the finger gun can't
+      // set off the airstrike
       const isFist = indexFolded && folded >= 3 && pinchRatio > 0.35;
 
       if (isFist) {
@@ -1400,11 +1435,26 @@
       handState.fistStart = 0;
       handState.fistFired = false;
 
-      // Hysteresis stops the pinch flickering at the threshold
-      handState.pinching = handState.pinching ? pinchRatio < 0.45 : pinchRatio < 0.3;
-      handFiring = handState.pinching;
-      if (handState.pinching) setGestureIndicator("FIRING! (PINCH)", "fire");
-      else setGestureIndicator("AIM READY", "idle");
+      if (shootGesture === 'pinch') {
+        // Hysteresis stops the pinch flickering at the threshold
+        handState.pinching = handState.pinching ? pinchRatio < 0.45 : pinchRatio < 0.3;
+        handFiring = handState.pinching;
+        if (handState.pinching) setGestureIndicator("FIRING! (PINCH)", "fire");
+        else setGestureIndicator("AIM READY", "idle");
+        return;
+      }
+
+      // Finger gun: index pointing, the other three fingers curled into a
+      // grip. Dropping the thumb onto the side of the index finger (between
+      // its base knuckle and middle joint) fires; holding it down keeps
+      // firing; lifting it stops. Hysteresis stops flicker at the edge.
+      const gunGrip = othersCurled >= 2;
+      const hammer = segDist3(marks[4], marks[5], marks[6]) / palm3;
+      handState.hammerDown = gunGrip && (handState.hammerDown ? hammer < 0.5 : hammer < 0.33);
+      handFiring = handState.hammerDown;
+      if (handFiring) setGestureIndicator("BANG! (THUMB DOWN)", "fire");
+      else if (gunGrip) setGestureIndicator("GUN READY · DROP THUMB", "idle");
+      else setGestureIndicator("MAKE A FINGER GUN", "lost");
     }
 
     function drawHandSkeleton(marks) {
@@ -1494,6 +1544,10 @@
         triggerSpecialGrenade();
       } else if (e.key === 'f' || e.key === 'F') {
         flashlightEnabled = !flashlightEnabled;
+      } else if (e.key === 'g' || e.key === 'G') {
+        setShootGesture(shootGesture === 'gun' ? 'pinch' : 'gun');
+        showAlertBanner(shootGesture === 'gun' ? 'SHOOT: FINGER GUN · DROP YOUR THUMB' : 'SHOOT: PINCH THUMB & INDEX');
+        updateShootHelp();
       } else if (e.key === '[' || e.key === ']') {
         setAimSensitivity(aimSensitivity + (e.key === ']' ? 0.05 : -0.05));
         showAlertBanner(`AIM SENSITIVITY ${aimSensitivity.toFixed(2)}x`);
@@ -1529,6 +1583,20 @@
     }
     diffButtons.forEach((b) => b.addEventListener('click', () => setDifficulty(b.dataset.diff)));
     setDifficulty(difficulty);
+
+    // Start-screen "SHOOT" tip and the bottom-left gesture hint follow the
+    // chosen shooting gesture
+    function updateShootHelp() {
+      const help = document.getElementById('shootHelp');
+      const hint = document.getElementById('shootHint');
+      if (help) {
+        help.innerHTML = shootGesture === 'gun'
+          ? 'Make a <strong class="text-rose-400">Finger Gun</strong> and <strong class="text-rose-400">drop your thumb</strong> to fire (hold it down for full-auto), or hold Left-Click. Aim for head for <strong class="text-emerald-400">3x HEADSHOT CRIT</strong>! <span class="text-zinc-500">[G] switches to pinch.</span>'
+          : '<strong class="text-rose-400">Pinch Thumb & Index</strong> together or hold Left-Click. Aim for head for <strong class="text-emerald-400">3x HEADSHOT CRIT</strong>! <span class="text-zinc-500">[G] switches to finger gun.</span>';
+      }
+      if (hint) hint.textContent = shootGesture === 'gun' ? 'THUMB DOWN' : 'PINCH';
+    }
+    updateShootHelp();
 
     btnToggleFlashlight.addEventListener('click', () => {
       flashlightEnabled = !flashlightEnabled;
