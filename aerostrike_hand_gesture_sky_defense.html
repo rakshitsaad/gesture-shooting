@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>DeadFront: First-Person Gesture Zombie Defense</title>
+  <title>DEAD FRONT</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="intro/dead-front.css">
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Google Fonts -->
@@ -161,6 +163,7 @@
   </style>
 </head>
 <body class="relative w-screen h-screen bg-black text-slate-100">
+  <div id="deadFrontRoot"></div>
 
   <!-- Main Game Canvas Container -->
   <div id="gameContainer" class="absolute inset-0 z-0 w-full h-full">
@@ -229,6 +232,12 @@
         </div>
       </div>
 
+      <!-- Fullscreen Toggle -->
+      <button id="btnFullscreen" class="hud-glass p-2.5 text-red-400 transition-all border rounded-xl bg-zinc-950/80 border-red-800/50 hover:bg-red-950/40 active:scale-95" title="Full Screen [F11]">
+        <svg id="iconFullscreenEnter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg>
+        <svg id="iconFullscreenExit" class="hidden w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"></path></svg>
+      </button>
+
       <!-- Sound Toggle -->
       <button id="btnSoundToggle" class="hud-glass p-2.5 text-red-400 transition-all border rounded-xl bg-zinc-950/80 border-red-800/50 hover:bg-red-950/40 active:scale-95" title="Toggle Sound">
         <svg id="iconSoundOn" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"></path></svg>
@@ -282,7 +291,7 @@
 
   <!-- Start & Calibration Modal -->
   <div id="startModal" class="absolute inset-0 z-40 flex items-center justify-center p-4 bg-black/60 backdrop-blur-[2px] transition-all duration-300">
-    <div class="max-w-xl w-full p-8 border-2 rounded-3xl bg-zinc-950/90 border-red-700/60 shadow-2xl shadow-red-950/80 text-center relative overflow-hidden">
+    <div class="max-w-xl w-full max-h-full px-8 py-5 border-2 rounded-3xl bg-zinc-950/90 border-red-700/60 shadow-2xl shadow-red-950/80 text-center relative overflow-x-hidden overflow-y-auto" style="scrollbar-width: thin; scrollbar-color: #7f1d1d transparent;">
       <div class="absolute -top-24 -left-24 w-52 h-52 bg-red-600/10 rounded-full blur-3xl pointer-events-none"></div>
       <div class="absolute -bottom-24 -right-24 w-52 h-52 bg-emerald-600/10 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -347,7 +356,13 @@
             <button data-diff="hard" class="flex-1 py-1.5 rounded-lg border font-bold tracking-wider">HARD</button>
           </div>
         </div>
-        <p id="difficultyHint" class="mt-1 text-[10px] tracking-wider text-zinc-500"></p>
+        <div class="flex items-center justify-between gap-3 mt-1">
+          <p id="difficultyHint" class="text-[10px] tracking-wider text-zinc-500"></p>
+          <label class="flex items-center gap-2 text-xs text-zinc-400 cursor-pointer whitespace-nowrap" title="[F11] switches in game">
+            <input id="fullscreenStart" type="checkbox" checked class="accent-red-600">
+            <span class="tracking-widest uppercase">Full screen</span>
+          </label>
+        </div>
       </div>
 
       <div class="flex flex-col sm:flex-row gap-3">
@@ -394,11 +409,24 @@
       <button id="btnRestart" class="w-full py-4 rounded-xl font-hud font-bold text-sm tracking-wider uppercase bg-gradient-to-r from-red-700 via-rose-600 to-red-800 hover:brightness-110 text-white shadow-lg shadow-red-900/60 active:scale-95 transition-all">
         Reinforce Barricade
       </button>
+      <button id="btnMainMenu" class="w-full mt-3 py-3 rounded-xl font-hud font-bold text-xs tracking-wider uppercase bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-700 active:scale-95 transition-all">
+        Main Menu
+      </button>
     </div>
   </div>
 
   <!-- JavaScript Game Engine -->
   <script>
+    // Until intro/main.js says otherwise the intro owns the screen. If it
+    // can't load (say the page was opened straight from disk), the game's own
+    // start screen is still there underneath.
+    window.deadFrontIntroActive = true;
+    window.deadFrontIntroFailed = () => {
+      window.deadFrontIntroActive = false;
+      const root = document.getElementById('deadFrontRoot');
+      if (root) root.remove();
+    };
+
     /* ============================================================
        0. MATH & COLOR UTILITIES
        ============================================================ */
@@ -468,34 +496,93 @@
     /* ============================================================
        1. SYNTHESIZED PROCEDURAL AUDIO ENGINE (Web Audio API)
        ============================================================ */
+    // Sound mix: every volume to tweak is here. 1 = the recording's own level.
+    const AUDIO_MIX = {
+      ZOMBIE_LOUDNESS: 1.5,          // all zombie sounds together (groans, horde, attacks)
+      ZOMBIE_BASE_VOLUME: 0.25,      // one zombie's groan at the far end of the street
+      ZOMBIE_MAX_VOLUME: 0.95,       // one zombie's groan right at the barricade
+      ZOMBIE_ATTACK_VOLUME: 1.2,     // the growl as a zombie gets very close
+      ZOMBIE_HEAR_DISTANCE: 34,      // metres from the barricade where BASE applies
+      ZOMBIE_ATTACK_DISTANCE: 3.5,   // metres from the barricade where the attack growl fires
+      ZOMBIE_GROAN_MIN_SECONDS: 2,   // each zombie groans at a random gap between these two
+      ZOMBIE_GROAN_MAX_SECONDS: 5,
+      ZOMBIE_GROAN_MAX_LENGTH: 2.5,  // longest single groan, in seconds
+      ZOMBIE_DEATH_FADE: 0.03,       // how fast a voice fades when its zombie dies
+      MAX_ZOMBIE_SOUNDS: 4,          // groans playing at once (the horde loop is separate)
+      LASER_VOLUME: 0.72,            // laser shot (1 = how loud it was before)
+      MAX_LASER_SOUNDS: 3,           // overlapping shots; the oldest fades to make room
+      LASER_OVERLAP_DUCK: 0.25       // each overlapping shot lowers the next by this share
+    };
+
     class ZombieSoundFX {
       constructor() {
         this.ctx = null;
         this.master = null;
         this.muted = false;
+        this.zombieVoices = [];
+        this.laserVoices = [];
+        this.masterVolume = 1;
+        this.sfxLevel = 1;
+        this.musicLevel = 1;
+      }
+
+      // Settings screen: each level runs from 0 to 1
+      setVolumes(master, music, sfx) {
+        this.masterVolume = master;
+        this.musicLevel = music;
+        this.sfxLevel = sfx;
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        this.output.gain.setTargetAtTime(this.muted ? 0 : master, now, 0.05);
+        this.musicVolume.gain.setTargetAtTime(music, now, 0.05);
+        this.sfxVolume.gain.setTargetAtTime(sfx, now, 0.05);
       }
 
       init() {
         if (!this.ctx) {
           const AudioContext = window.AudioContext || window.webkitAudioContext;
           this.ctx = new AudioContext();
-          this.master = this.ctx.createGain();
-          this.master.gain.value = this.muted ? 0 : 1;
-          // A gentle compressor glues the layered effects together and keeps
-          // rapid fire loud and punchy without clipping
-          this.comp = this.ctx.createDynamicsCompressor();
-          this.comp.threshold.value = -20;
-          this.comp.knee.value = 12;
-          this.comp.ratio.value = 8;
-          this.comp.attack.value = 0.003;
-          this.comp.release.value = 0.15;
-          // Output trim: the compressor adds make-up gain, so bring the
-          // overall level back down to leave headroom (no clipping)
+          // Output trim: the compressors add make-up gain, so bring the
+          // overall level back down to leave headroom
           this.trim = this.ctx.createGain();
           this.trim.gain.value = 0.62;
-          this.master.connect(this.comp);
-          this.comp.connect(this.trim);
-          this.trim.connect(this.ctx.destination);
+          // A gentle compressor glues layered effects together and keeps them
+          // punchy. Zombies and the laser each get their own, with their level
+          // after it: a shared one would flatten those levels back out.
+          const addBus = (level) => {
+            const input = this.ctx.createGain();
+            const comp = this.ctx.createDynamicsCompressor();
+            comp.threshold.value = -20;
+            comp.knee.value = 12;
+            comp.ratio.value = 8;
+            comp.attack.value = 0.003;
+            comp.release.value = 0.15;
+            const out = this.ctx.createGain();
+            out.gain.value = level;
+            input.connect(comp); comp.connect(out); out.connect(this.trim);
+            return input;
+          };
+          this.master = addBus(1);
+          this.zombieBus = addBus(AUDIO_MIX.ZOMBIE_LOUDNESS);
+          this.laserBus = addBus(AUDIO_MIX.LASER_VOLUME);
+          // Last stage: a limiter so everything at once can't clip, then mute
+          this.limiter = this.ctx.createDynamicsCompressor();
+          this.limiter.threshold.value = -3;
+          this.limiter.knee.value = 0;
+          this.limiter.ratio.value = 20;
+          this.limiter.attack.value = 0.002;
+          this.limiter.release.value = 0.1;
+          this.output = this.ctx.createGain();
+          this.output.gain.value = this.muted ? 0 : this.masterVolume;
+          this.sfxVolume = this.ctx.createGain();
+          this.sfxVolume.gain.value = this.sfxLevel;
+          this.musicVolume = this.ctx.createGain();
+          this.musicVolume.gain.value = this.musicLevel;
+          this.trim.connect(this.sfxVolume);
+          this.sfxVolume.connect(this.limiter);
+          this.musicVolume.connect(this.limiter);
+          this.limiter.connect(this.output);
+          this.output.connect(this.ctx.destination);
         }
         if (this.ctx.state === 'suspended') {
           this.ctx.resume();
@@ -611,9 +698,9 @@
           let panner = null;
           if (this.ctx.createStereoPanner) {
             panner = this.ctx.createStereoPanner();
-            out.connect(panner); panner.connect(this.master);
+            out.connect(panner); panner.connect(this.zombieBus);
           } else {
-            out.connect(this.master);
+            out.connect(this.zombieBus);
           }
           const dur = this.zombieVoice.duration;
           for (const [rate, side, offset] of [[0.94, -0.45, 0], [1.07, 0.45, dur * 0.47]]) {
@@ -656,16 +743,90 @@
         if (ctx.createStereoPanner) {
           const p = ctx.createStereoPanner();
           p.pan.value = Math.max(-1, Math.min(1, pan));
-          g.connect(p); p.connect(this.master);
+          g.connect(p); p.connect(this.zombieBus);
         } else {
-          g.connect(this.master);
+          g.connect(this.zombieBus);
         }
         src.start(now, c.start, c.dur);
       }
 
+      // One zombie's groan, kept so the game can follow that zombie as it
+      // walks. At the sound limit a new voice only plays if it is clearly
+      // louder than the quietest one, which then fades out to make room.
+      startZombieVoice(pan, vol, deep) {
+        if (this.muted || !this.ctx) return null;
+        const ctx = this.ctx, now = ctx.currentTime;
+        if (!this.zombieVoice) {
+          // The recording didn't load: spaced-out synthesized roars instead
+          if (now - (this.synthRoarAt || -9) < 1.5) return null;
+          this.synthRoarAt = now;
+          this.playZombieRoar(pan, Math.min(1, vol), deep);
+          return null;
+        }
+        if (this.zombieVoices.length >= AUDIO_MIX.MAX_ZOMBIE_SOUNDS) {
+          const quietest = this.zombieVoices.reduce((a, b) => (b.vol < a.vol ? b : a));
+          if (vol < quietest.vol * 1.3) return null;
+          this.stopZombieVoice(quietest);
+        }
+        const c = this.voiceClips[Math.floor(Math.random() * this.voiceClips.length)];
+        const rate = deep ? 0.72 : 0.88 + Math.random() * 0.24;
+        const dur = Math.min(c.dur, AUDIO_MIX.ZOMBIE_GROAN_MAX_LENGTH), len = dur / rate;
+        const src = ctx.createBufferSource();
+        src.buffer = this.zombieVoice;
+        src.playbackRate.value = rate;
+        // Fixed shape of the groan, then a separate level that follows distance
+        const env = ctx.createGain();
+        const peak = Math.max(0.0002, 0.9 * c.gain);
+        env.gain.setValueAtTime(0.0001, now);
+        env.gain.exponentialRampToValueAtTime(peak, now + 0.06);
+        env.gain.setValueAtTime(peak, now + Math.max(0.07, len - 0.2));
+        env.gain.exponentialRampToValueAtTime(0.0001, now + len);
+        const level = ctx.createGain();
+        level.gain.value = vol;
+        src.connect(env); env.connect(level);
+        const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+        if (panner) {
+          panner.pan.value = Math.max(-1, Math.min(1, pan));
+          level.connect(panner); panner.connect(this.zombieBus);
+        } else {
+          level.connect(this.zombieBus);
+        }
+        const v = { src, level, panner, vol, done: false };
+        this.zombieVoices.push(v);
+        src.onended = () => this.dropZombieVoice(v);
+        src.start(now, c.start, dur);
+        return v;
+      }
+
+      updateZombieVoice(v, vol, pan) {
+        const now = this.ctx.currentTime;
+        v.vol = vol;
+        v.level.gain.setTargetAtTime(vol, now, 0.08);
+        if (v.panner) v.panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), now, 0.08);
+      }
+
+      // A short fade rather than a hard stop, so there is no click
+      stopZombieVoice(v) {
+        if (v.done) return;
+        const now = this.ctx.currentTime;
+        v.level.gain.setTargetAtTime(0, now, AUDIO_MIX.ZOMBIE_DEATH_FADE);
+        v.src.stop(now + AUDIO_MIX.ZOMBIE_DEATH_FADE * 5);
+        this.dropZombieVoice(v);
+      }
+
+      dropZombieVoice(v) {
+        v.done = true;
+        const i = this.zombieVoices.indexOf(v);
+        if (i >= 0) this.zombieVoices.splice(i, 1);
+      }
+
+      stopAllZombieVoices() {
+        for (const v of this.zombieVoices.slice()) this.stopZombieVoice(v);
+      }
+
       setMuted(muted) {
         this.muted = muted;
-        if (this.master) this.master.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.05);
+        if (this.output) this.output.gain.setTargetAtTime(muted ? 0 : this.masterVolume, this.ctx.currentTime, 0.05);
       }
 
       noiseBuffer(seconds, decaySeconds) {
@@ -688,7 +849,7 @@
       }
 
       // One enveloped voice: source -> filter -> gain -> master
-      voice(src, filterType, f0, f1, q, peak, attack, dur, now) {
+      voice(src, filterType, f0, f1, q, peak, attack, dur, now, out = this.master) {
         const filter = this.ctx.createBiquadFilter();
         filter.type = filterType;
         filter.Q.value = q;
@@ -700,7 +861,7 @@
         gain.gain.exponentialRampToValueAtTime(0.0008, now + dur);
         src.connect(filter);
         filter.connect(gain);
-        gain.connect(this.master);
+        gain.connect(out);
         src.start(now);
         src.stop(now + dur + 0.02);
       }
@@ -719,11 +880,25 @@
           src.buffer = this.laserBuf;
           src.playbackRate.value = v;
           const len = c.dur / v, g = this.ctx.createGain();
-          const peak = 0.55 * c.gain;
+          // Rapid fire: fade the oldest shot past the limit, and lower each
+          // new shot by how many are still ringing, so they don't stack up
+          if (this.laserVoices.length >= AUDIO_MIX.MAX_LASER_SOUNDS) {
+            const old = this.laserVoices.shift();
+            old.g.gain.cancelScheduledValues(now);
+            old.g.gain.setTargetAtTime(0, now, 0.012);
+            old.src.stop(now + 0.06);
+          }
+          const peak = 0.55 * c.gain / (1 + AUDIO_MIX.LASER_OVERLAP_DUCK * this.laserVoices.length);
           g.gain.setValueAtTime(peak, now);
           g.gain.setValueAtTime(peak, now + len * 0.7);
           g.gain.exponentialRampToValueAtTime(0.0005, now + len);
-          src.connect(g); g.connect(this.master);
+          src.connect(g); g.connect(this.laserBus);
+          const shot = { src, g };
+          this.laserVoices.push(shot);
+          src.onended = () => {
+            const i = this.laserVoices.indexOf(shot);
+            if (i >= 0) this.laserVoices.splice(i, 1);
+          };
           src.start(now, c.start, c.dur);
           return;
         }
@@ -735,16 +910,16 @@
           return o;
         };
         // Zap: detuned saw + square, through a sweeping resonant low-pass
-        this.voice(osc('sawtooth', 2600, 260, 0.16, -9), 'lowpass', 7000, 1100, 5, 0.085, 0.004, 0.16, now);
-        this.voice(osc('square', 1300, 140, 0.16, 9), 'lowpass', 5000, 800, 3, 0.05, 0.004, 0.16, now);
+        this.voice(osc('sawtooth', 2600, 260, 0.16, -9), 'lowpass', 7000, 1100, 5, 0.085, 0.004, 0.16, now, this.laserBus);
+        this.voice(osc('square', 1300, 140, 0.16, 9), 'lowpass', 5000, 800, 3, 0.05, 0.004, 0.16, now, this.laserBus);
         // Sub punch
-        this.voice(osc('sine', 160, 42, 0.12), 'lowpass', 400, 200, 0.7, 0.26, 0.003, 0.13, now);
+        this.voice(osc('sine', 160, 42, 0.12), 'lowpass', 400, 200, 0.7, 0.26, 0.003, 0.13, now, this.laserBus);
         // Energy crackle
         const n = this.ctx.createBufferSource();
         n.buffer = this.cachedNoise(0.08, 0.025);
-        this.voice(n, 'highpass', 3200, 6000, 0.8, 0.07, 0.002, 0.07, now);
+        this.voice(n, 'highpass', 3200, 6000, 0.8, 0.07, 0.002, 0.07, now, this.laserBus);
         // Emitter ring
-        this.voice(osc('triangle', 3300, 2900, 0.1), 'bandpass', 3100, 3100, 8, 0.03, 0.002, 0.1, now);
+        this.voice(osc('triangle', 3300, 2900, 0.1), 'bandpass', 3100, 3100, 8, 0.03, 0.002, 0.1, now, this.laserBus);
       }
 
       // The beam burning into a zombie: a hot sizzle plus a dull, wet thud
@@ -791,7 +966,7 @@
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
 
         osc.connect(gain);
-        gain.connect(this.master);
+        gain.connect(this.zombieBus);
         osc.start(now);
         osc.stop(now + 0.45);
       }
@@ -810,7 +985,7 @@
         gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
 
         osc.connect(gain);
-        gain.connect(this.master);
+        gain.connect(this.zombieBus);
         osc.start(now);
         osc.stop(now + 0.3);
       }
@@ -911,9 +1086,9 @@
         if (ctx.createStereoPanner) {
           const p = ctx.createStereoPanner();
           p.pan.value = Math.max(-1, Math.min(1, pan));
-          out.connect(p); p.connect(this.master);
+          out.connect(p); p.connect(this.zombieBus);
         } else {
-          out.connect(this.master);
+          out.connect(this.zombieBus);
         }
 
         const throat = ctx.createOscillator();
@@ -1431,7 +1606,10 @@
 
     // Feed each new webcam frame to the tracker, skipping frames while the
     // previous one is still being processed.
+    let pumpRunning = false;
     function pumpVideoFrames() {
+      if (pumpRunning) return;
+      pumpRunning = true;
       const next = () => video.requestVideoFrameCallback
         ? video.requestVideoFrameCallback(onVideoFrame)
         : requestAnimationFrame(onVideoFrame);
@@ -1458,6 +1636,17 @@
         next();
       }
       next();
+    }
+
+    function stopCameraTracking() {
+      if (video.srcObject) video.srcObject.getTracks().forEach((t) => t.stop());
+      video.srcObject = null;
+      if (handWorker) handWorker.terminate();
+      handWorker = null;
+      handTracker = null;
+      cameraInstance = null;
+      trackerBusy = false;
+      switchToMouseMode("MOUSE ACTIVE");
     }
 
     function switchToMouseMode(label = "MOUSE MODE") {
@@ -1634,7 +1823,7 @@
     /* ============================================================
        4. INPUT & FALLBACK CONTROLS
        ============================================================ */
-    const isUiTarget = (t) => t && t.closest && (t.closest('button') || t.closest('select') || t.closest('#startModal') || t.closest('#gameOverModal'));
+    const isUiTarget = (t) => t && t.closest && (t.closest('button') || t.closest('select') || t.closest('#startModal') || t.closest('#gameOverModal') || t.closest('#deadFrontRoot'));
 
     const isMouseLocked = () => document.pointerLockElement === canvas;
 
@@ -1684,10 +1873,15 @@
     window.addEventListener('blur', () => { pointerHeld = false; });
 
     window.addEventListener('keydown', (e) => {
+      if (window.deadFrontIntroActive && e.key !== 'F11') return;
       if (e.code === 'Space') {
         // Otherwise Space would also "click" whichever HUD button has focus
         e.preventDefault();
         triggerSpecialGrenade();
+      } else if (e.key === 'F11') {
+        // Use the game's full screen so the button and icon stay in step
+        e.preventDefault();
+        toggleFullscreen();
       } else if (e.key === 'f' || e.key === 'F') {
         flashlightEnabled = !flashlightEnabled;
       } else if (e.key === 'g' || e.key === 'G') {
@@ -2580,23 +2774,8 @@
       }
 
       spawnGroup(isBossWave(wave) ? Math.max(2, groupSizeFor(wave) - 2) : groupSizeFor(wave));
-
-      // A distant roar as the group shambles in
-      if (Math.random() < 0.5 && gameTime - lastRoarAt >= ROAR_GAP) { audio.playZombieRoar(rand(-0.6, 0.6), 0.35, false); lastRoarAt = gameTime; }
     }
 
-    // Zombie roars, from the zombie's side of the screen and louder the
-    // closer it is: one from a random zombie every few seconds, and one
-    // as each zombie comes within ROAR_NEAR metres of the barricade (with a
-    // short gap between roars so a crowd doesn't turn into noise)
-    const ROAR_NEAR = 9;
-    const ROAR_GAP = 2;   // seconds of quiet between roars, at least
-    let nextRoarAt = 3, lastRoarAt = -10;
-    function roar(z, vol) {
-      const pan = z.b ? clamp((z.b.x / W) * 2 - 1, -1, 1) : 0;
-      audio.playZombieRoar(pan, vol, z.type === 'tank');
-      lastRoarAt = gameTime;
-    }
     // Continuous horde voice: louder with more zombies and as they close in,
     // panned toward where the crowd is. Silent before a game and after it
     // ends. Updated a few times a second (the audio glides between values).
@@ -2619,20 +2798,42 @@
       audio.setHorde(level, sum > 0 ? panSum / sum : 0);
     }
 
-    function updateRoars() {
-      if (gameTime - lastRoarAt < ROAR_GAP) return;
+    // Quiet far away and loud up close, on a smooth curve
+    function zombieVoiceVolume(z) {
+      const m = AUDIO_MIX;
+      const near = 1 - clamp((z.z - BARRICADE_Z) / m.ZOMBIE_HEAR_DISTANCE, 0, 1);
+      return m.ZOMBIE_BASE_VOLUME + (m.ZOMBIE_MAX_VOLUME - m.ZOMBIE_BASE_VOLUME) * near * near;
+    }
+
+    // Each zombie groans on its own random timer and its voice follows it up
+    // the street; a final growl fires as it nears the barricade. A dying
+    // zombie's voice fades straight away. Levels update a few times a second
+    // (the audio glides between values).
+    let zombieVoicesAt = 0;
+    function updateZombieVoices() {
+      const m = AUDIO_MIX;
+      const refresh = time - zombieVoicesAt >= 0.1;
+      if (refresh) zombieVoicesAt = time;
       for (const z of zombies) {
-        if (!z.isDying && !z.roared && z.z < ROAR_NEAR && !z.boss) {
-          z.roared = true;
-          if (Math.random() < 0.4) { roar(z, clamp(4 / z.z, 0.45, 1)); return; }
+        if (z.isDying) {
+          if (z.voice) { audio.stopZombieVoice(z.voice); z.voice = null; }
+          continue;
         }
-      }
-      if (gameTime >= nextRoarAt) {
-        nextRoarAt = gameTime + rand(3, 6);
-        const alive = zombies.filter(z => !z.isDying && !z.boss);
-        if (alive.length) {
-          const z = pick(alive);
-          roar(z, clamp(5 / z.z, 0.25, 0.9));
+        if (z.voice && z.voice.done) z.voice = null;
+        if (z.nextGroanAt === undefined) z.nextGroanAt = gameTime + rand(0.5, m.ZOMBIE_GROAN_MAX_SECONDS);
+        const pan = z.b ? clamp((z.b.x / W) * 2 - 1, -1, 1) : 0;
+        const deep = z.type === 'tank' || z.boss;
+
+        if (!z.attackGrowled && z.z - BARRICADE_Z < m.ZOMBIE_ATTACK_DISTANCE) {
+          z.attackGrowled = true;
+          if (z.voice) audio.stopZombieVoice(z.voice);
+          z.voice = audio.startZombieVoice(pan, m.ZOMBIE_ATTACK_VOLUME, deep);
+        } else if (gameTime >= z.nextGroanAt) {
+          z.nextGroanAt = gameTime + rand(m.ZOMBIE_GROAN_MIN_SECONDS, m.ZOMBIE_GROAN_MAX_SECONDS);
+          if (!z.voice) z.voice = audio.startZombieVoice(pan, zombieVoiceVolume(z), deep);
+        }
+        if (refresh && z.voice) {
+          audio.updateZombieVoice(z.voice, z.attackGrowled ? m.ZOMBIE_ATTACK_VOLUME : zombieVoiceVolume(z), pan);
         }
       }
     }
@@ -4820,7 +5021,7 @@
         lastSpawnTime = gameTime;
       }
       updatePickups(dt);
-      updateRoars();
+      updateZombieVoices();
 
       // Airstrike comets falling, then blasting where they land
       updateComets(dt);
@@ -4887,6 +5088,10 @@
     let lastFrame = performance.now();
     function frame(now) {
       requestAnimationFrame(frame);
+      if (window.deadFrontIntroActive) {
+        lastFrame = nextFrameAt = now;
+        return;
+      }
       if (now < nextFrameAt - 1) return;
       // Step the deadline by a fixed amount so skipped refreshes even out to
       // exactly 60 a second, but don't let it fall far behind after a stall
@@ -5030,8 +5235,30 @@
       alertTimer = setTimeout(() => alertBanner.classList.add('opacity-0'), 2500);
     }
 
+    // Lifetime stats for the Survival Records screen. A run counts when it
+    // starts; its kills and time are added when it ends or the page closes.
+    function loadStats() {
+      try {
+        return { kills: 0, bestTime: 0, sessions: 0, ...JSON.parse(localStorage.getItem('deadfront_stats') || '{}') };
+      } catch (e) {
+        return { kills: 0, bestTime: 0, sessions: 0 };
+      }
+    }
+    function saveStats(stats) {
+      try { localStorage.setItem('deadfront_stats', JSON.stringify(stats)); } catch (e) { /* storage unavailable */ }
+    }
+    function recordRunEnd() {
+      if (!isRunning) return;
+      const stats = loadStats();
+      stats.kills += kills;
+      stats.bestTime = Math.max(stats.bestTime, Math.round(gameTime));
+      saveStats(stats);
+    }
+    window.addEventListener('pagehide', recordRunEnd);
+
     function triggerGameOver() {
       if (!isRunning) return;
+      recordRunEnd();
       isRunning = false;
       pointerHeld = false;
       handFiring = false;
@@ -5049,10 +5276,14 @@
 
       updateAirstrikeVignette();
       if (airstrikeCalloutAnim) airstrikeCalloutAnim.cancel();
+      audio.stopAllZombieVoices();
       gameOverModal.classList.remove('hidden');
     }
 
     function resetGame() {
+      const stats = loadStats();
+      stats.sessions++;
+      saveStats(stats);
       score = 0;
       headshots = 0;
       kills = 0;
@@ -5071,7 +5302,7 @@
       comets = [];
       barricadeSmears = [];
       pickups = [];
-      nextRoarAt = 3; lastRoarAt = -10;
+      audio.stopAllZombieVoices();
       waveKills = 0;
       breakUntil = 0;
       waveIntroAt = 0;
@@ -5101,7 +5332,36 @@
     /* ============================================================
        15. INITIALIZATION & LISTENERS
        ============================================================ */
+    const btnFullscreen = document.getElementById('btnFullscreen');
+    const fullscreenStart = document.getElementById('fullscreenStart');
+
+    function toggleFullscreen() {
+      const change = document.fullscreenElement
+        ? document.exitFullscreen()
+        : document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+      change.catch(() => showAlertBanner('FULL SCREEN NOT AVAILABLE'));
+    }
+
+    document.addEventListener('fullscreenchange', () => {
+      const on = !!document.fullscreenElement;
+      document.getElementById('iconFullscreenEnter').classList.toggle('hidden', on);
+      document.getElementById('iconFullscreenExit').classList.toggle('hidden', !on);
+      btnFullscreen.title = on ? 'Exit Full Screen [F11]' : 'Full Screen [F11]';
+    });
+
+    btnFullscreen.addEventListener('click', () => {
+      btnFullscreen.blur();
+      toggleFullscreen();
+    });
+
+    try { fullscreenStart.checked = localStorage.getItem('deadfront_fullscreen') !== 'off'; } catch (err) { /* storage unavailable */ }
+    fullscreenStart.addEventListener('change', () => {
+      try { localStorage.setItem('deadfront_fullscreen', fullscreenStart.checked ? 'on' : 'off'); } catch (err) { /* storage unavailable */ }
+    });
+
     function startGame(useCamera) {
+      // Must run first, while the browser still counts this as the player's click
+      if (fullscreenStart.checked && !document.fullscreenElement) toggleFullscreen();
       audio.init();
       startModal.classList.add('hidden');
       if (document.activeElement) document.activeElement.blur();
@@ -5132,9 +5392,44 @@
       }
     });
 
+    // What the intro and main menu (intro/main.js) use from the game
+    window.DeadFrontGame = {
+      audio,
+      startGame,
+      setDifficulty,
+      getDifficulty: () => difficulty,
+      setAimSensitivity,
+      getAimSensitivity: () => aimSensitivity,
+      setShootGesture(g) { setShootGesture(g); updateShootHelp(); },
+      getShootGesture: () => shootGesture,
+      fullscreenStart,
+      toggleFullscreen,
+      toggleMute: () => btnSoundToggle.click(),
+      initCamera: initMediaPipe,
+      stopCamera: stopCameraTracking,
+      isCameraActive: () => isCameraActive,
+      cameraStatus: () => camStatusText.textContent,
+      cameraSelect: camSelect,
+      // Where the tracked hand is aiming (0 to 1 across the screen), or null
+      handAim() {
+        if (!isCameraActive || !camAim.last) return null;
+        const p = camAimAt(performance.now());
+        return { x: p.x / W, y: p.y / H };
+      },
+      records: () => ({ highScore, ...loadStats() }),
+      leaveGame() {
+        isRunning = false;
+        gameOverModal.classList.add('hidden');
+        startModal.classList.add('hidden');
+      }
+    };
+
     resizeCanvas();
     updateHUD();
     requestAnimationFrame(frame);
   </script>
+  <script type="importmap">{ "imports": { "three": "./vendor/three/three.module.js", "three/addons/": "./vendor/three/addons/" } }</script>
+  <script src="vendor/gsap.min.js"></script>
+  <script type="module" src="intro/main.js" onerror="window.deadFrontIntroFailed()"></script>
 </body>
 </html>
